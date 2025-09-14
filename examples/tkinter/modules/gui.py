@@ -4,9 +4,9 @@ import asyncio
 import threading
 import time
 import queue
-from jumpboot import JSONQueueServer, exposed
+from jumpboot import MessagePackQueueServer, exposed
 
-class TkinterGUIService(JSONQueueServer):
+class TkinterGUIService(MessagePackQueueServer):
     """A service that exposes tkinter GUI controls to Go."""
     
     def __init__(self, pipe_in=None, pipe_out=None):

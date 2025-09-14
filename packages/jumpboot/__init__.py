@@ -1,9 +1,6 @@
 Pipe_In = None
 Pipe_Out = None
 
-from .jsonqueue import JSONQueue, JSONQueueServer, exposed
-from .namedsemaphore import NamedSemaphore
-
 # Add msgpack functionality directly in the jumpboot package
 import os
 
@@ -57,3 +54,8 @@ except ImportError:
         loads = unpackb
         dump = pack
         dumps = packb
+
+from .bufferpool import BufferPool
+from .jsonqueue import JSONQueue, JSONQueueServer, exposed
+from .msgpackqueue import MessagePackTransport, MessagePackQueueServer
+from .namedsemaphore import NamedSemaphore

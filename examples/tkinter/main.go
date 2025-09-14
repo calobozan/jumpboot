@@ -34,7 +34,7 @@ func main() {
 	}
 
 	// Create the service
-	gui, err := env.NewJSONQueueProcess(program, nil, nil, nil)
+	gui, err := env.NewQueueProcess(program, nil, nil, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -31,6 +31,14 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if env.IsNew {
+		fmt.Println("Installing dependencies...")
+		err := env.PipInstallPackage("msgpack", "", "", false, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	// Create the program with the calculator service
 	program := &jumpboot.PythonProgram{
 		Name: "CalculatorService",
@@ -50,7 +58,7 @@ func main() {
 	service := &MyService{}
 
 	// Create the JSON queue process
-	calculator, err := env.NewJSONQueueProcess(program, service, nil, nil)
+	calculator, err := env.NewQueueProcess(program, service, nil, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -137,16 +145,20 @@ func main() {
 		fmt.Println("Expected error:", err)
 	}
 
-	// profile 1000 calls
+	// profile 10000 calls (Execution time for 10000 add operations: 1.800222s)
+	// jsonqueue 			1.800222s
+	// msgpackqueue			1.863716958s
+	// msgpackqueue(native) 1.662312583s
 	start := time.Now()
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 10000; i++ {
+		// fmt.Printf("Adding %d + 3...\n", i)
 		_, err = calculator.Call("add", 0, map[string]float64{"x": float64(i), "y": 3})
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 	elapsed := time.Since(start)
-	fmt.Printf("Execution time for 1000 add operations: %s\n", elapsed)
+	fmt.Printf("Execution time for 10000 add operations: %s\n", elapsed)
 
 	// Call the Python calculate_with_tax method using chaining and CallReflect
 	fmt.Println("Calling calculate_with_tax CallReflect...")

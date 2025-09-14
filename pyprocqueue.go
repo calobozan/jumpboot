@@ -1,7 +1,6 @@
 package jumpboot
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,12 +12,14 @@ import (
 	"time"
 )
 
-// JSONQueueProcess extends PythonProcess with JSON-based bidirectional communication
+// QueueProcess extends PythonProcess with JSON-based bidirectional communication
 // that can directly call methods on Python classes with bidirectional command handling
-type JSONQueueProcess struct {
+type QueueProcess struct {
 	*PythonProcess
-	reader          *bufio.Reader
-	writer          *bufio.Writer
+	serializer Serializer
+	transport  Transport
+	// reader          *bufio.Reader
+	// writer          *bufio.Writer
 	mutex           sync.Mutex
 	responseMap     map[string]chan map[string]interface{}
 	commandHandlers map[string]CommandHandler
@@ -34,7 +35,7 @@ type JSONQueueProcess struct {
 type CommandHandler func(data interface{}, requestID string) (interface{}, error)
 
 type methodCall struct {
-	process       *JSONQueueProcess
+	process       *QueueProcess
 	methodName    string
 	data          map[string]interface{}
 	timeout       time.Duration
@@ -42,14 +43,14 @@ type methodCall struct {
 }
 
 // RegisterHandler registers a handler for a specific command
-func (jq *JSONQueueProcess) RegisterHandler(command string, handler CommandHandler) {
+func (jq *QueueProcess) RegisterHandler(command string, handler CommandHandler) {
 	jq.mutex.Lock()
 	defer jq.mutex.Unlock()
 	jq.commandHandlers[command] = handler
 }
 
 // SetDefaultHandler sets a handler for commands without a specific handler
-func (jq *JSONQueueProcess) SetDefaultHandler(handler CommandHandler) {
+func (jq *QueueProcess) SetDefaultHandler(handler CommandHandler) {
 	jq.mutex.Lock()
 	defer jq.mutex.Unlock()
 	jq.defaultHandler = handler
@@ -69,8 +70,8 @@ type ParameterInfo struct {
 	Type     string `json:"type,omitempty"`
 }
 
-// NewJSONQueueProcess creates a new PythonProcess with JSON queue communication
-func (env *Environment) NewJSONQueueProcess(program *PythonProgram, serviceStruct interface{}, environment_vars map[string]string, extrafiles []*os.File) (*JSONQueueProcess, error) {
+// NewQueueProcess creates a new PythonProcess with message queue communication
+func (env *Environment) NewQueueProcess(program *PythonProgram, serviceStruct interface{}, environment_vars map[string]string, extrafiles []*os.File) (*QueueProcess, error) {
 	pyProcess, _, err := env.NewPythonProcessFromProgram(program, environment_vars, extrafiles, false)
 	if err != nil {
 		return nil, err
@@ -86,10 +87,12 @@ func (env *Environment) NewJSONQueueProcess(program *PythonProgram, serviceStruc
 		io.Copy(os.Stderr, pyProcess.Stderr)
 	}()
 
-	jq := &JSONQueueProcess{
-		PythonProcess:   pyProcess,
-		reader:          bufio.NewReader(pyProcess.PipeIn),
-		writer:          bufio.NewWriter(pyProcess.PipeOut),
+	jq := &QueueProcess{
+		PythonProcess: pyProcess,
+		serializer:    MsgpackSerializer{},
+		transport:     NewMsgpackTransport(pyProcess.PipeIn, pyProcess.PipeOut),
+		// reader:          bufio.NewReader(pyProcess.PipeIn),
+		// writer:          bufio.NewWriter(pyProcess.PipeOut),
 		responseMap:     make(map[string]chan map[string]interface{}),
 		nextID:          1,
 		methodCache:     make(map[string]MethodInfo),
@@ -182,7 +185,7 @@ func (env *Environment) NewJSONQueueProcess(program *PythonProgram, serviceStruc
 }
 
 // discoverMethods fetches information about exposed Python methods
-func (jq *JSONQueueProcess) discoverMethods() error {
+func (jq *QueueProcess) discoverMethods() error {
 	response, err := jq.SendCommand("__get_methods__", nil, 0, true)
 	if err != nil {
 		return err
@@ -234,7 +237,7 @@ func (jq *JSONQueueProcess) discoverMethods() error {
 }
 
 // Call dynamically calls a Python method by name with the provided arguments
-func (jq *JSONQueueProcess) Call(methodName string, timeoutSeconds int, args interface{}) (interface{}, error) {
+func (jq *QueueProcess) Call(methodName string, timeoutSeconds int, args interface{}) (interface{}, error) {
 	response, err := jq.SendCommand(methodName, args, timeoutSeconds, true)
 	if err != nil {
 		return nil, err
@@ -261,7 +264,7 @@ func (jq *JSONQueueProcess) Call(methodName string, timeoutSeconds int, args int
 }
 
 // GetMethods returns a list of exposed Python methods
-func (jq *JSONQueueProcess) GetMethods() []string {
+func (jq *QueueProcess) GetMethods() []string {
 	var methods []string
 	for name := range jq.methodCache {
 		methods = append(methods, name)
@@ -270,13 +273,13 @@ func (jq *JSONQueueProcess) GetMethods() []string {
 }
 
 // GetMethodInfo returns information about a specific method
-func (jq *JSONQueueProcess) GetMethodInfo(methodName string) (MethodInfo, bool) {
+func (jq *QueueProcess) GetMethodInfo(methodName string) (MethodInfo, bool) {
 	info, ok := jq.methodCache[methodName]
 	return info, ok
 }
 
 // Start begins processing messages
-func (jq *JSONQueueProcess) Start() {
+func (jq *QueueProcess) Start() {
 	jq.mutex.Lock()
 	if jq.running {
 		jq.mutex.Unlock()
@@ -289,8 +292,8 @@ func (jq *JSONQueueProcess) Start() {
 	go jq.messageLoop()
 }
 
-// messageLoop reads and processes incoming JSON messages
-func (jq *JSONQueueProcess) messageLoop() {
+// messageLoop reads and processes incoming messages
+func (jq *QueueProcess) messageLoop() {
 	for {
 		jq.mutex.Lock()
 		running := jq.running
@@ -300,7 +303,7 @@ func (jq *JSONQueueProcess) messageLoop() {
 			break
 		}
 
-		responseJSON, err := jq.reader.ReadBytes('\n')
+		response, err := jq.transport.Receive()
 		if err != nil {
 			if err == io.EOF {
 				// The pipe was closed
@@ -311,8 +314,12 @@ func (jq *JSONQueueProcess) messageLoop() {
 		}
 
 		var message map[string]interface{}
-		if err := json.Unmarshal(responseJSON, &message); err != nil {
-			log.Printf("Error decoding JSON message: %v", err)
+		// if err := json.Unmarshal(response, &message); err != nil {
+		// 	log.Printf("Error decoding JSON message: %v", err)
+		// 	continue
+		// }
+		if err := jq.serializer.Unmarshal(response, &message); err != nil {
+			log.Printf("Error decoding message: %v", err)
 			continue
 		}
 
@@ -346,7 +353,7 @@ func (jq *JSONQueueProcess) messageLoop() {
 }
 
 // processCommand handles a command received from Python
-func (jq *JSONQueueProcess) processCommand(command string, data interface{}, requestID string) {
+func (jq *QueueProcess) processCommand(command string, data interface{}, requestID string) {
 	var response interface{}
 	var err error
 
@@ -378,10 +385,12 @@ func (jq *JSONQueueProcess) processCommand(command string, data interface{}, req
 
 		// Send the response
 		jq.mutex.Lock()
-		responseJSON, _ := json.Marshal(responseObj)
-		_, err = jq.writer.Write(append(responseJSON, '\n'))
+		// responseJSON, _ := json.Marshal(responseObj)
+		response, _ := jq.serializer.Marshal(responseObj)
+		err = jq.transport.Send(response)
 		if err == nil {
-			err = jq.writer.Flush()
+			// err = jq.writer.Flush()
+			err = jq.transport.Flush()
 		}
 		jq.mutex.Unlock()
 
@@ -392,7 +401,7 @@ func (jq *JSONQueueProcess) processCommand(command string, data interface{}, req
 }
 
 // generateRequestID generates a unique request ID
-func (jq *JSONQueueProcess) generateRequestID() string {
+func (jq *QueueProcess) generateRequestID() string {
 	jq.idMutex.Lock()
 	defer jq.idMutex.Unlock()
 	id := fmt.Sprintf("req-%d", jq.nextID)
@@ -401,17 +410,18 @@ func (jq *JSONQueueProcess) generateRequestID() string {
 }
 
 // Read a message from Python
-func (jq *JSONQueueProcess) readMessage() (map[string]interface{}, error) {
-	line, err := jq.reader.ReadString('\n')
+func (jq *QueueProcess) readMessage() (map[string]interface{}, error) {
+	//line, err := jq.reader.ReadString('\n')
+	line, err := jq.transport.Receive()
 	if err != nil {
 		return nil, err
 	}
 
-	// Trim any whitespace
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return nil, fmt.Errorf("empty line received")
-	}
+	// // Trim any whitespace
+	// line = strings.TrimSpace(line)
+	// if line == "" {
+	// 	return nil, fmt.Errorf("empty line received")
+	// }
 
 	// Parse the JSON
 	var message map[string]interface{}
@@ -423,20 +433,21 @@ func (jq *JSONQueueProcess) readMessage() (map[string]interface{}, error) {
 }
 
 // Send a message to Python
-func (jq *JSONQueueProcess) sendMessage(message map[string]interface{}) error {
-	messageJSON, err := json.Marshal(message)
+func (jq *QueueProcess) sendMessage(message map[string]interface{}) error {
+	msgdata, err := jq.serializer.Marshal(message)
 	if err != nil {
-		return fmt.Errorf("failed to marshal JSON message: %w", err)
+		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
 	jq.mutex.Lock()
-	_, err = jq.writer.Write(append(messageJSON, '\n'))
+	err = jq.transport.Send(msgdata)
 	if err != nil {
 		jq.mutex.Unlock()
 		return fmt.Errorf("failed to write message: %w", err)
 	}
 
-	err = jq.writer.Flush()
+	// err = jq.writer.Flush()
+	err = jq.transport.Flush()
 	jq.mutex.Unlock()
 
 	if err != nil {
@@ -449,7 +460,7 @@ func (jq *JSONQueueProcess) sendMessage(message map[string]interface{}) error {
 // SendCommand with error handling
 // If waitForResponse is true, the function will wait for a response with the given timeout
 // If timeout is 0, the function will wait indefinitely for a response
-func (jq *JSONQueueProcess) SendCommand(command string, data interface{}, timeoutSeconds int, waitForResponse bool) (map[string]interface{}, error) {
+func (jq *QueueProcess) SendCommand(command string, data interface{}, timeoutSeconds int, waitForResponse bool) (map[string]interface{}, error) {
 	requestID := jq.generateRequestID()
 	request := map[string]interface{}{
 		"command":    command,
@@ -492,8 +503,8 @@ func (jq *JSONQueueProcess) SendCommand(command string, data interface{}, timeou
 	}
 }
 
-// Close cleans up resources used by the JSONQueueProcess
-func (jq *JSONQueueProcess) Close() error {
+// Close cleans up resources used by the QueueProcess
+func (jq *QueueProcess) Close() error {
 	// Signal that we're closing
 	jq.mutex.Lock()
 	if !jq.running {
@@ -514,7 +525,7 @@ func (jq *JSONQueueProcess) Close() error {
 	return jq.PythonProcess.Terminate()
 }
 
-func (jq *JSONQueueProcess) Shutdown() error {
+func (jq *QueueProcess) Shutdown() error {
 	// Send shutdown command and wait for response
 	resp, err := jq.SendCommand("shutdown", nil, 0, true)
 	if err != nil {
@@ -528,7 +539,7 @@ func (jq *JSONQueueProcess) Shutdown() error {
 }
 
 // On specifies the Python method to be called.
-func (jq *JSONQueueProcess) On(methodName string) *methodCall {
+func (jq *QueueProcess) On(methodName string) *methodCall {
 	return &methodCall{
 		process:    jq,
 		methodName: methodName,
@@ -625,31 +636,6 @@ func (mc *methodCall) CallReflect(target interface{}) error {
 	targetElem.Set(resultValue)
 	return nil
 }
-
-// func (mc *methodCall) CallReflect(target interface{}) error {
-// 	// ... (Add validation for parameter names and types here, potentially using GetMethodInfo)
-// 	mc.reflectResult = true
-// 	result, err := mc.Call()
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	// Use reflection to set the value of the target
-// 	targetValue := reflect.ValueOf(target)
-// 	if targetValue.Kind() != reflect.Ptr || targetValue.IsNil() {
-// 		return fmt.Errorf("target must be a non-nil pointer")
-// 	}
-
-// 	targetValue = targetValue.Elem()
-// 	resultValue := reflect.ValueOf(result)
-
-// 	if !resultValue.Type().AssignableTo(targetValue.Type()) {
-// 		return fmt.Errorf("cannot assign result of type %v to target of type %v", resultValue.Type(), targetValue.Type())
-// 	}
-
-// 	targetValue.Set(resultValue)
-// 	return nil
-// }
 
 // Helper function to extract the result or error from the response
 func extractResult(response map[string]interface{}, err error) (interface{}, error) {

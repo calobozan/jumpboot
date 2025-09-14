@@ -1,8 +1,8 @@
 import time
 import sys
-from jumpboot import JSONQueueServer, exposed
+from jumpboot import MessagePackQueueServer, exposed
 
-class CalculatorService(JSONQueueServer):
+class CalculatorService(MessagePackQueueServer):
     """A simple calculator service that exposes methods to Go."""
     
     @exposed
