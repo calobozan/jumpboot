@@ -6,6 +6,8 @@ import (
 	"os/exec"
 )
 
+// isDirWritable checks if the directory at path is writable by attempting
+// to create and remove a temporary file.
 func isDirWritable(path string) bool {
 	// Attempt to create a temporary file in the specified directory.
 	tmpFile, err := os.CreateTemp(path, "test-*")

@@ -1,4 +1,3 @@
-// micromamba.go
 package jumpboot
 
 import (
@@ -11,16 +10,20 @@ import (
 	"runtime"
 )
 
-// micromambaBaseURL is the base URL for downloading micromamba.  It's a package-level
-// variable to allow overriding for testing.
+// micromambaBaseURL is the base URL for downloading micromamba binaries.
+// This can be overridden for testing or to use a custom mirror.
 var micromambaBaseURL = "https://github.com/mamba-org/micromamba-releases/releases"
 
-// https://github.com/mamba-org/micromamba-releases/releases/download/micromamba-linux-64
-// https://github.com/mamba-org/micromamba-releases/releases/download/2.2.0-0/micromamba-linux-aarch64
-
-// ExpectMicromamba downloads the micromamba binary to the specified bin folder.
-// The progressCallback function is called with the download progress.
-// Returns the path to the downloaded binary.
+// ExpectMicromamba ensures micromamba is available in the specified folder.
+// If not present, it downloads the appropriate binary for the current platform.
+//
+// Supported platforms:
+//   - Linux: amd64, arm64 (aarch64)
+//   - macOS: amd64, arm64
+//   - Windows: amd64 (arm64 uses amd64 emulation)
+//
+// The binary is downloaded from GitHub releases and made executable on Unix systems.
+// Returns the full path to the micromamba binary.
 func ExpectMicromamba(binFolder string, progressCallback ProgressCallback) (string, error) {
 	// Detect platform and architecture
 	platform := runtime.GOOS
@@ -139,10 +142,14 @@ func ExpectMicromamba(binFolder string, progressCallback ProgressCallback) (stri
 	return binpath, nil
 }
 
-// MicromambaInstallPackage installs a package using micromamba.
-// The channel argument is optional and can be used to specify a conda channel.
-// If the channel is not specified, the default channel is used.
-// micromamba commands need to have rc files disabled and prefix specified
+// MicromambaInstallPackage installs a conda package using micromamba.
+//
+// Parameters:
+//   - packageToInstall: Package name or specifier (e.g., "numpy", "scipy=1.9")
+//   - channel: Conda channel (e.g., "conda-forge"); empty uses default
+//
+// The installation is performed with --no-rc to avoid configuration conflicts
+// and uses the environment's prefix directly.
 func (env *Environment) MicromambaInstallPackage(packageToInstall string, channel string) error {
 	var installCmd *exec.Cmd
 	if channel != "" {

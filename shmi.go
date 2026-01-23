@@ -7,23 +7,53 @@ import (
 	"unsafe"
 )
 
-// SharedMemory a cross-platform shared memory object
+// SharedMemory provides cross-platform shared memory for efficient data exchange
+// between Go and Python processes. It implements io.Reader, io.Writer, io.Seeker,
+// io.ReaderAt, and io.WriterAt for flexible access patterns.
+//
+// Shared memory is created with CreateSharedMemory and opened with OpenSharedMemory.
+// Both processes must use the same name and agree on the size.
+//
+// Note: This feature requires CGO and platform-specific implementations:
+//   - Linux/macOS: POSIX shared memory (shm_open, mmap)
+//   - Windows: Named file mappings
+//
+// Example:
+//
+//	// In Go (creator)
+//	shm, _ := jumpboot.CreateSharedMemory("/my_shm", 1024*1024)
+//	shm.Write([]byte("hello"))
+//	shm.Close()
+//
+//	// In Python (consumer)
+//	from jumpboot import SharedMemory
+//	shm = SharedMemory("/my_shm", 1024*1024)
+//	data = shm.read(5)  # b"hello"
 type SharedMemory struct {
-	// shmi is the underlying platform shared memory object
-	m    *shmi
-	pos  int64
+	// m is the platform-specific shared memory implementation
+	m *shmi
+
+	// pos is the current read/write position
+	pos int64
+
+	// Name is the identifier used to open/create this shared memory
 	Name string
 }
 
+// GetSize returns the size of the shared memory region in bytes.
 func (o *SharedMemory) GetSize() int {
 	return o.m.getSize()
 }
 
+// GetPtr returns an unsafe pointer to the shared memory region.
+// Use with caution; prefer the typed slice methods for safer access.
 func (o *SharedMemory) GetPtr() unsafe.Pointer {
 	return o.m.getPtr()
 }
 
-// CreateSharedMemory creates a new shared memory segment
+// CreateSharedMemory creates a new named shared memory region.
+// The name should start with "/" on POSIX systems. The size is in bytes.
+// Returns an error if the memory cannot be allocated or mapped.
 func CreateSharedMemory(name string, size int) (*SharedMemory, error) {
 	m, err := create(name, size)
 	if err != nil {
@@ -32,7 +62,9 @@ func CreateSharedMemory(name string, size int) (*SharedMemory, error) {
 	return &SharedMemory{m, 0, name}, nil
 }
 
-// Open open existing shared memory with the given name
+// OpenSharedMemory opens an existing named shared memory region.
+// The name and size must match those used when creating the memory.
+// Returns an error if the memory doesn't exist or cannot be mapped.
 func OpenSharedMemory(name string, size int) (*SharedMemory, error) {
 	m, err := open(name, size)
 	if err != nil {
@@ -41,7 +73,8 @@ func OpenSharedMemory(name string, size int) (*SharedMemory, error) {
 	return &SharedMemory{m, 0, name}, nil
 }
 
-// Close and discard shared memory
+// Close unmaps and releases the shared memory region.
+// The underlying memory is only destroyed when all processes have closed it.
 func (o *SharedMemory) Close() (err error) {
 	if o.m != nil {
 		err = o.m.close()
@@ -52,7 +85,8 @@ func (o *SharedMemory) Close() (err error) {
 	return err
 }
 
-// Read shared memory (from current position)
+// Read reads up to len(p) bytes from shared memory at the current position.
+// Implements io.Reader.
 func (o *SharedMemory) Read(p []byte) (n int, err error) {
 	n, err = o.ReadAt(p, o.pos)
 	if err != nil {
@@ -62,12 +96,14 @@ func (o *SharedMemory) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
-// ReadAt read shared memory (offset)
+// ReadAt reads len(p) bytes from shared memory starting at offset off.
+// Implements io.ReaderAt.
 func (o *SharedMemory) ReadAt(p []byte, off int64) (n int, err error) {
 	return o.m.readAt(p, off)
 }
 
-// Seek to new read/write position at shared memory
+// Seek sets the position for the next Read or Write.
+// Implements io.Seeker with io.SeekStart, io.SeekCurrent, and io.SeekEnd.
 func (o *SharedMemory) Seek(offset int64, whence int) (int64, error) {
 	switch whence {
 	case io.SeekStart:
@@ -84,7 +120,8 @@ func (o *SharedMemory) Seek(offset int64, whence int) (int64, error) {
 	return offset, nil
 }
 
-// Write byte slice to shared memory (at current position)
+// Write writes len(p) bytes to shared memory at the current position.
+// Implements io.Writer.
 func (o *SharedMemory) Write(p []byte) (n int, err error) {
 	n, err = o.WriteAt(p, o.pos)
 	if err != nil {
@@ -94,11 +131,18 @@ func (o *SharedMemory) Write(p []byte) (n int, err error) {
 	return n, nil
 }
 
-// Write byte slice to shared memory (offset)
+// WriteAt writes len(p) bytes to shared memory starting at offset off.
+// Implements io.WriterAt.
 func (o *SharedMemory) WriteAt(p []byte, off int64) (n int, err error) {
 	return o.m.writeAt(p, off)
 }
 
+// GetTypedSlice returns a typed slice view of shared memory starting at offset.
+// The slice provides zero-copy access to the underlying memory.
+// Changes to the slice are immediately visible in shared memory.
+//
+// Warning: The returned slice is only valid while the SharedMemory is open.
+// Using it after Close() results in undefined behavior.
 func GetTypedSlice[T any](shm *SharedMemory, offset int) []T {
 	// Calculate the number of elements that can fit in the remaining space
 	elementSize := int(unsafe.Sizeof(*new(T)))
@@ -110,39 +154,47 @@ func GetTypedSlice[T any](shm *SharedMemory, offset int) []T {
 	return unsafe.Slice((*T)(unsafe.Add(ptr, uintptr(offset))), int(numElements))
 }
 
-// Type-specific methods for common types
+// GetFloat32Slice returns a float32 slice view of shared memory at offset.
 func (o *SharedMemory) GetFloat32Slice(offset int) []float32 {
 	return GetTypedSlice[float32](o, offset)
 }
 
+// GetFloat64Slice returns a float64 slice view of shared memory at offset.
 func (o *SharedMemory) GetFloat64Slice(offset int) []float64 {
 	return GetTypedSlice[float64](o, offset)
 }
 
+// GetInt16Slice returns an int16 slice view of shared memory at offset.
 func (o *SharedMemory) GetInt16Slice(offset int) []int16 {
 	return GetTypedSlice[int16](o, offset)
 }
 
+// GetInt32Slice returns an int32 slice view of shared memory at offset.
 func (o *SharedMemory) GetInt32Slice(offset int) []int32 {
 	return GetTypedSlice[int32](o, offset)
 }
 
+// GetInt64Slice returns an int64 slice view of shared memory at offset.
 func (o *SharedMemory) GetInt64Slice(offset int) []int64 {
 	return GetTypedSlice[int64](o, offset)
 }
 
+// GetUint16Slice returns a uint16 slice view of shared memory at offset.
 func (o *SharedMemory) GetUint16Slice(offset int) []uint16 {
 	return GetTypedSlice[uint16](o, offset)
 }
 
+// GetUint32Slice returns a uint32 slice view of shared memory at offset.
 func (o *SharedMemory) GetUint32Slice(offset int) []uint32 {
 	return GetTypedSlice[uint32](o, offset)
 }
 
+// GetUint64Slice returns a uint64 slice view of shared memory at offset.
 func (o *SharedMemory) GetUint64Slice(offset int) []uint64 {
 	return GetTypedSlice[uint64](o, offset)
 }
 
+// GetByteSlice returns a byte slice view of shared memory at offset.
 func (o *SharedMemory) GetByteSlice(offset int) []byte {
 	return GetTypedSlice[byte](o, offset)
 }

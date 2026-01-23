@@ -17,17 +17,41 @@ import (
 //go:embed scripts/repl.py
 var replScript string
 
-// REPLPythonProcess represents a Python process that can execute code in a REPL-like manner
+// REPLPythonProcess provides interactive Python code execution where state persists
+// between calls. It wraps a PythonProcess with a custom REPL implementation that uses
+// delimiter-based communication for reliable output capture.
+//
+// The REPL maintains Python interpreter state, so variables defined in one Execute
+// call remain available in subsequent calls:
+//
+//	repl, _ := env.NewREPLPythonProcess(nil, nil, nil, nil)
+//	repl.Execute("x = 42", true)
+//	result, _ := repl.Execute("print(x * 2)", true)  // returns "84"
+//
+// Thread-safe: Execute calls are serialized via mutex to prevent interleaving.
 type REPLPythonProcess struct {
 	*PythonProcess
-	m              sync.Mutex
-	closed         bool
+
+	// m protects concurrent access to the REPL
+	m sync.Mutex
+
+	// closed indicates the REPL has been terminated
+	closed bool
+
+	// combinedOutput controls whether stdout/stderr are combined in output
 	combinedOutput bool
 }
 
-// NewREPLPythonProcess creates a new Python process that can execute code in a REPL-like manner
-// kvpairs parameter is a map of key-value pairs to pass to the Python process that are accessible in the Python code via the jumpboot module.
-// environment_vars parameter is a map of environment variables to set in the Python process.
+// NewREPLPythonProcess creates a new interactive Python REPL process.
+//
+// Parameters:
+//   - kvpairs: Key-value data accessible in Python as jumpboot.<key>; may be nil
+//   - environment_vars: Additional environment variables; may be nil
+//   - modules: Additional Python modules available for import; may be nil
+//   - packages: Additional Python packages available for import; may be nil
+//
+// The REPL process starts with combined output mode (stdout and stderr merged).
+// Use Execute with combinedOutput=false to capture them separately.
 func (env *Environment) NewREPLPythonProcess(kvpairs map[string]interface{}, environment_vars map[string]string, modules []Module, packages []Package) (*REPLPythonProcess, error) {
 	cwd, _ := os.Getwd()
 	if modules == nil {
@@ -62,17 +86,27 @@ func (env *Environment) NewREPLPythonProcess(kvpairs map[string]interface{}, env
 	}, nil
 }
 
-// Define the custom delimiter with non-visible ASCII characters
+// DELIMITER marks the end of REPL output using non-printable ASCII characters.
+// This allows reliable detection of output boundaries without conflicting with user code.
 const DELIMITER = "\x01\x02\x03\n"
 
-// because of course Windows has to be different, we need a different read delimiter for Windows
-// however, we can use the same write delimiter because the Python process will always use the same delimiter
+// WINDELIMITER is the Windows variant with CRLF line endings.
+// Windows Python outputs CRLF, but the write delimiter uses LF consistently.
 const WINDELIMITER = "\x01\x02\x03\r\n"
 
-// Execute executes the given code in the Python process and returns the output.
-// code parameter is the Python code to execute within the REPLPythonProcess.
-// combinedOutput parameter specifies whether to combine stdout and stderr as the result.
-// Execute is a blocking function that waits for the Python process to finish executing the code.
+// Execute runs Python code in the REPL and returns the captured output.
+//
+// Parameters:
+//   - code: Python source code to execute (may be multi-line)
+//   - combinedOutput: If true, stdout and stderr are merged; if false, only stdout
+//
+// Execute blocks until the code completes and all output is received. The REPL
+// maintains state between calls, so variables and imports persist.
+//
+// Returns an error if the REPL is closed, if there's a communication error, or
+// if the Python code raised an exception (the error contains the traceback).
+//
+// Empty lines in the code are normalized and trailing whitespace is trimmed.
 func (rpp *REPLPythonProcess) Execute(code string, combinedOutput bool) (string, error) {
 	iswin := runtime.GOOS == "windows"
 
@@ -166,12 +200,17 @@ func (rpp *REPLPythonProcess) Execute(code string, combinedOutput bool) (string,
 	}
 }
 
-// ExecuteWithTimeout executes the given code in the Python process and returns the output.
-// code parameter is the Python code to execute within the REPLPythonProcess.
-// combinedOutput parameter specifies whether to combine stdout and stderr as the result.
-// timeout parameter specifies the maximum time to wait for the Python process to finish executing the code.
-// ExecuteWithTimeout is a non-blocking function that waits for the Python process to finish executing the code up to the specified timeout.
-// If the timeout is reached, the Python process is terminated, REPLPythonProcess is marked as closed, and an error is returned.
+// ExecuteWithTimeout runs Python code with a maximum execution time.
+//
+// Parameters:
+//   - code: Python source code to execute
+//   - combinedOutput: If true, stdout and stderr are merged
+//   - timeout: Maximum time to wait for completion
+//
+// If the timeout is exceeded, the Python process is terminated and the REPL
+// is marked as closed. Subsequent calls will return an error.
+//
+// Note: After a timeout, the REPL cannot be reused. Create a new one if needed.
 func (rpp *REPLPythonProcess) ExecuteWithTimeout(code string, combinedOutput bool, timeout time.Duration) (string, error) {
 	// we need to lock the mutex to prevent multiple goroutines from writing to the Python process at the same time
 	rpp.m.Lock()
@@ -258,7 +297,8 @@ func (rpp *REPLPythonProcess) ExecuteWithTimeout(code string, combinedOutput boo
 	}
 }
 
-// Close closes the Python REPL process.
+// Close terminates the Python REPL process and releases resources.
+// After Close, the REPL cannot be reused. Returns an error if already closed.
 func (rpp *REPLPythonProcess) Close() error {
 	// we need to lock the mutex to prevent multiple goroutines from writing to the Python process at the same time
 	rpp.m.Lock()

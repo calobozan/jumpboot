@@ -10,23 +10,36 @@ import (
 	"path/filepath"
 )
 
+// ExecOptions specifies a command to send to PythonExecProcess.
 type ExecOptions struct {
+	// ExecType is the command type: "exec" for code execution, "exit" to terminate.
 	ExecType string `json:"type"`
-	Command  string `json:"code"`
+
+	// Command is the Python code to execute (for "exec" type).
+	Command string `json:"code"`
 }
 
+// ExecResult contains the response from PythonExecProcess.
 type ExecResult struct {
+	// ReturnType is "output" for success or "error" for exceptions.
 	ReturnType string `json:"type"`
-	Output     string `json:"output"`
+
+	// Output contains the result or error message.
+	Output string `json:"output"`
 }
 
 //go:embed modules/pyprocexec/main.py
 var pythonExecMain string
 
+// PythonExecProcess provides simple command-based Python execution using JSON.
+// Each Exec call sends code to Python and receives the result as JSON.
+// This is simpler than QueueProcess but lacks bidirectional RPC capabilities.
 type PythonExecProcess struct {
 	*PythonProcess
 }
 
+// NewPythonExecProcess creates a Python process for simple command execution.
+// Commands are sent as JSON and results are received as JSON responses.
 func (env *Environment) NewPythonExecProcess(environment_vars map[string]string, extrafiles []*os.File) (*PythonExecProcess, error) {
 	cwd, _ := os.Getwd()
 	program := &PythonProgram{
@@ -51,6 +64,8 @@ func (env *Environment) NewPythonExecProcess(environment_vars map[string]string,
 	}, nil
 }
 
+// Exec sends Python code for execution and returns the output.
+// Returns an error if the code raised an exception or communication failed.
 func (p *PythonExecProcess) Exec(code string) (string, error) {
 	e := ExecOptions{
 		ExecType: "exec",
@@ -89,6 +104,7 @@ func (p *PythonExecProcess) Exec(code string) (string, error) {
 	}
 }
 
+// Close sends an exit command to terminate the Python process.
 func (p *PythonExecProcess) Close() {
 	e := ExecOptions{
 		ExecType: "exit",

@@ -5,15 +5,27 @@ import (
 	"strings"
 )
 
+// Version represents a semantic version with major, minor, and patch components.
+// Minor and Patch may be -1 if not specified (e.g., "3" parses as {3, -1, -1}).
 type Version struct {
+	// Major is the major version number (required).
 	Major int
-	Minor int // -1 if not specified
-	Patch int // -1 if not specified
+
+	// Minor is the minor version number (-1 if not specified).
+	Minor int
+
+	// Patch is the patch version number (-1 if not specified).
+	Patch int
 }
 
-// ParseVersion parses a version string in the format "X.Y.Z" and returns a Version object.
-// If the version string is not in the format "X.Y.Z", it will try parsing it as "X.Y" or "X".
-// Any additional characters after the version string will be ignored.
+// ParseVersion parses a version string into a Version struct.
+// Accepts formats: "X.Y.Z", "X.Y", or "X". Any trailing text is ignored.
+//
+// Examples:
+//   - "3.10.5" -> {3, 10, 5}
+//   - "3.10" -> {3, 10, -1}
+//   - "3" -> {3, -1, -1}
+//   - "2.1.0-beta" -> {2, 1, 0}
 func ParseVersion(versionStr string) (Version, error) {
 	version := Version{
 		Minor: -1,
@@ -37,9 +49,8 @@ func ParseVersion(versionStr string) (Version, error) {
 	return version, nil
 }
 
+// ParsePythonVersion parses output from "python --version" (e.g., "Python 3.10.5").
 func ParsePythonVersion(versionStr string) (Version, error) {
-	// split the version string on the space
-	// the first part must be "Python", the second part is the version
 	parts := strings.Split(versionStr, " ")
 	if len(parts) != 2 {
 		return Version{}, fmt.Errorf("invalid version string: %s", versionStr)
@@ -50,9 +61,8 @@ func ParsePythonVersion(versionStr string) (Version, error) {
 	return ParseVersion(parts[1])
 }
 
+// ParsePipVersion parses output from "pip --version" (e.g., "pip 23.0 from ...").
 func ParsePipVersion(versionStr string) (Version, error) {
-	// split the version string on the space
-	// the first part must be "Python", the second part is the version
 	parts := strings.Split(versionStr, " ")
 	if len(parts) < 2 {
 		return Version{}, fmt.Errorf("invalid version string: %s", versionStr)
@@ -63,10 +73,8 @@ func ParsePipVersion(versionStr string) (Version, error) {
 	return ParseVersion(parts[1])
 }
 
-// Compare compares the version with another version and returns:
-// -1 if the version is less than the other version
-// 0 if the version is equal to the other version
-// 1 if the version is greater than the other version
+// Compare returns -1 if v < other, 0 if v == other, or 1 if v > other.
+// Comparison is done component by component (major, then minor, then patch).
 func (v *Version) Compare(other Version) int {
 	if v.Major > other.Major {
 		return 1
@@ -89,7 +97,8 @@ func (v *Version) Compare(other Version) int {
 	return 0
 }
 
-// String returns the string representation of the version.  We'll ignore -1 values.
+// String returns the version as a string, omitting unspecified components.
+// Examples: "3.10.5", "3.10", "3"
 func (v *Version) String() string {
 	if v.Patch != -1 {
 		return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
@@ -100,10 +109,14 @@ func (v *Version) String() string {
 	return fmt.Sprintf("%d", v.Major)
 }
 
+// MinorString returns the version as "major.minor" (e.g., "3.10").
+// Used for paths like "python3.10" or "site-packages/python3.10".
 func (v *Version) MinorString() string {
 	return fmt.Sprintf("%d.%d", v.Major, v.Minor)
 }
 
+// MinorStringCompact returns the version without separator (e.g., "310").
+// Used for Windows paths like "python310.dll".
 func (v *Version) MinorStringCompact() string {
 	return fmt.Sprintf("%d%d", v.Major, v.Minor)
 }

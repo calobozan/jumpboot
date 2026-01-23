@@ -14,48 +14,119 @@ import (
 	"strings"
 )
 
+// Environment represents a Python environment with all necessary paths and version
+// information. It can be created from micromamba, system Python, a virtual environment,
+// or restored from a JSON specification file.
+//
+// The Environment struct provides methods for running Python scripts, creating
+// Python processes, and installing packages via pip or micromamba.
 type Environment struct {
-	Name              string  // Name of the environment
-	RootDir           string  // Root directory of the environment
-	EnvPath           string  // Path to the environment
-	EnvBinPath        string  // Path to the bin directory within the environment
-	EnvLibPath        string  // Path to the lib directory within the environment
-	PythonVersion     Version // Version of the Python environment
-	MicromambaVersion Version // Version of the micromamba executable
-	PipVersion        Version // Version of the pip executable
-	MicromambaPath    string  // Path to the micromamba executable
-	PythonPath        string  // Path to the Python executable within the environment
-	PythonLibPath     string  // Path to the Python library within the environment
-	PipPath           string  // Path to the pip executable within the environment
-	PythonHeadersPath string  // Path to the Python headers within the environment
-	SitePackagesPath  string  // Path to the site-packages directory within the environment
-	IsNew             bool    // Whether the environment was newly created
+	// Name is the identifier for this environment (e.g., "myenv", "system").
+	Name string
+
+	// RootDir is the root directory containing the environment and micromamba binary.
+	RootDir string
+
+	// EnvPath is the full path to the environment directory.
+	EnvPath string
+
+	// EnvBinPath is the path to the bin (or Scripts on Windows) directory.
+	EnvBinPath string
+
+	// EnvLibPath is the path to the lib directory within the environment.
+	EnvLibPath string
+
+	// PythonVersion is the detected Python version (e.g., 3.10.12).
+	PythonVersion Version
+
+	// MicromambaVersion is the version of micromamba, if applicable.
+	MicromambaVersion Version
+
+	// PipVersion is the detected pip version.
+	PipVersion Version
+
+	// MicromambaPath is the full path to the micromamba executable.
+	// Empty for system Python or venv environments.
+	MicromambaPath string
+
+	// PythonPath is the full path to the Python executable.
+	PythonPath string
+
+	// PythonLibPath is the path to the Python shared library (libpython).
+	// May be empty if the library is not found.
+	PythonLibPath string
+
+	// PipPath is the full path to the pip executable.
+	PipPath string
+
+	// PythonHeadersPath is the path to the Python development headers.
+	PythonHeadersPath string
+
+	// SitePackagesPath is the path to the site-packages directory.
+	SitePackagesPath string
+
+	// IsNew indicates whether this environment was newly created (true)
+	// or already existed (false).
+	IsNew bool
 }
 
+// VenvOptions configures the creation of a Python virtual environment.
+// These options correspond to the flags available in Python's venv module.
 type VenvOptions struct {
+	// SystemSitePackages gives access to the system site-packages directory.
 	SystemSitePackages bool
-	Symlinks           bool
-	Copies             bool
-	Clear              bool
-	Upgrade            bool
-	WithoutPip         bool
-	Prompt             string
-	UpgradeDeps        bool
+
+	// Symlinks creates symlinks to Python files instead of copies (Unix default).
+	Symlinks bool
+
+	// Copies creates copies of Python files instead of symlinks (Windows default).
+	Copies bool
+
+	// Clear deletes the contents of the environment directory if it exists.
+	Clear bool
+
+	// Upgrade upgrades an existing environment to use the current Python version.
+	Upgrade bool
+
+	// WithoutPip skips pip installation in the virtual environment.
+	WithoutPip bool
+
+	// Prompt sets a custom prompt prefix for the virtual environment.
+	Prompt string
+
+	// UpgradeDeps upgrades pip and setuptools to the latest versions.
+	UpgradeDeps bool
 }
 
-// EnvironmentSpec represents the complete environment specification.
+// EnvironmentSpec represents a complete environment specification that can be
+// serialized to JSON and used to recreate an identical environment.
+// This is the format used by FreezeToFile and CreateEnvironmentFromJSONFile.
 type EnvironmentSpec struct {
-	Name              string   `json:"name"`
-	Channels          []string `json:"channels,omitempty"`           // List of conda channels
-	CondaPackages     []string `json:"conda_packages"`               // List of conda packages (name=version=build)
-	PipPackages       []string `json:"pip_packages"`                 // List of pip packages (name==version)
-	PythonVersion     string   `json:"python_version,omitempty"`     // Python version (e.g., "3.9")
-	MicromambaVersion string   `json:"micromamba_version,omitempty"` //optional micromamba version
+	// Name is the environment name.
+	Name string `json:"name"`
+
+	// Channels lists the conda channels used (e.g., "conda-forge", "defaults").
+	Channels []string `json:"channels,omitempty"`
+
+	// CondaPackages lists conda packages in "name=version=build" format.
+	CondaPackages []string `json:"conda_packages"`
+
+	// PipPackages lists pip packages in "name==version" format.
+	PipPackages []string `json:"pip_packages"`
+
+	// PythonVersion specifies the Python version (e.g., "3.10").
+	PythonVersion string `json:"python_version,omitempty"`
+
+	// MicromambaVersion optionally specifies the micromamba version used.
+	MicromambaVersion string `json:"micromamba_version,omitempty"`
 }
 
-// user feedback options for CreateEnvironment
+// CreateEnvironmentOptions specifies feedback verbosity during environment creation.
 type CreateEnvironmentOptions int
 
+// ProgressCallback is called during long-running operations to report progress.
+// The message describes the current operation, current is the progress value,
+// and total is the expected total (-1 if unknown).
 type ProgressCallback func(message string, current, total int64)
 
 const (
@@ -69,6 +140,21 @@ const (
 	ShowNothing
 )
 
+// CreateEnvironmentMamba creates a new Python environment using micromamba.
+// If micromamba is not present in the rootDir/bin directory, it will be downloaded automatically.
+//
+// Parameters:
+//   - envName: Name for the new environment (e.g., "myenv")
+//   - rootDir: Root directory for micromamba and environments
+//   - pythonVersion: Python version to install (e.g., "3.10"); defaults to "3.10" if empty
+//   - channel: Conda channel to use (e.g., "conda-forge"); uses default if empty
+//   - progressCallback: Optional callback for progress updates; may be nil
+//
+// The environment is created at rootDir/envs/envName. If the environment already exists,
+// it is reused and IsNew will be false.
+//
+// Returns an error if the architecture is unsupported, the directory is not writable,
+// or the requested Python version cannot be satisfied.
 func CreateEnvironmentMamba(envName string, rootDir string, pythonVersion string, channel string, progressCallback ProgressCallback) (*Environment, error) {
 	if pythonVersion == "" {
 		pythonVersion = "3.10"
@@ -249,6 +335,13 @@ func CreateEnvironmentMamba(envName string, rootDir string, pythonVersion string
 	return env, nil
 }
 
+// CreateEnvironmentFromExacutable creates an Environment from an existing Python executable.
+// This is useful when you have a specific Python installation you want to use.
+//
+// The function queries the Python executable to determine version information,
+// site-packages path, pip location, and other environment details.
+//
+// Note: The function name contains a typo ("Exacutable") for backwards compatibility.
 func CreateEnvironmentFromExacutable(pythonPath string) (*Environment, error) {
 	env := &Environment{
 		Name:    "system",
@@ -357,6 +450,13 @@ func CreateEnvironmentFromExacutable(pythonPath string) (*Environment, error) {
 	return env, nil
 }
 
+// CreateEnvironmentFromSystem creates an Environment using the system Python installation.
+//
+// On Unix systems, it searches for "python3" then "python" using exec.LookPath.
+// On Windows, it first tries "py.exe" (Python launcher), then searches for "python"
+// while filtering out the Microsoft Store placeholder executables.
+//
+// Returns an error if no Python installation is found.
 func CreateEnvironmentFromSystem() (*Environment, error) {
 	pythonPath := ""
 	if runtime.GOOS == "windows" {
@@ -404,6 +504,19 @@ func CreateEnvironmentFromSystem() (*Environment, error) {
 	return CreateEnvironmentFromExacutable(pythonPath)
 }
 
+// CreateVenvEnvironment creates a Python virtual environment using the venv module.
+//
+// Parameters:
+//   - baseEnv: The base Python environment to create the venv from
+//   - venvPath: Path where the virtual environment will be created
+//   - options: Configuration options for the venv (see VenvOptions)
+//   - progressCallback: Optional callback for progress updates; may be nil
+//
+// The virtual environment inherits from baseEnv but has its own site-packages.
+// If the venv already exists and options.Clear is false, it may be upgraded
+// or reused depending on options.Upgrade.
+//
+// Returns an error if baseEnv is nil or venv creation fails.
 func CreateVenvEnvironment(baseEnv *Environment, venvPath string, options VenvOptions, progressCallback ProgressCallback) (*Environment, error) {
 	if baseEnv == nil {
 		return nil, fmt.Errorf("base environment is nil")
@@ -571,7 +684,19 @@ func CreateVenvEnvironment(baseEnv *Environment, venvPath string, options VenvOp
 	return newEnv, nil
 }
 
-// FreezeToFile now writes a JSON representation of the environment.
+// FreezeToFile saves the environment specification to a JSON file.
+//
+// The output includes:
+//   - Environment name and Python version
+//   - Conda packages with versions and build strings (if micromamba environment)
+//   - Pip packages with versions
+//   - Conda channels used
+//
+// Packages installed via pip are not duplicated in the conda package list.
+// The resulting JSON file can be used with CreateEnvironmentFromJSONFile to
+// recreate an identical environment.
+//
+// File URLs in pip freeze output are cleaned to show only package names.
 func (env *Environment) FreezeToFile(filePath string) error {
 	spec := EnvironmentSpec{
 		Name:          env.Name,
@@ -702,7 +827,16 @@ func (env *Environment) FreezeToFile(filePath string) error {
 	return nil
 }
 
-// CreateEnvironmentFromJSONFile creates a new environment from a JSON environment specification.
+// CreateEnvironmentFromJSONFile creates a new environment from a JSON specification file.
+//
+// The JSON file should match the EnvironmentSpec format, typically created by FreezeToFile.
+// This function:
+//  1. Creates a base micromamba environment with the specified Python version
+//  2. Installs all conda packages from the spec
+//  3. Installs all pip packages from the spec
+//
+// If no channels are specified in the JSON, "conda-forge" is used as the default.
+// The environment is created at rootDir/envs/<name> where name comes from the spec.
 func CreateEnvironmentFromJSONFile(filePath string, rootDir string, progressCallback ProgressCallback) (*Environment, error) {
 	// 1. Read the JSON file.
 	jsonData, err := os.ReadFile(filePath)

@@ -6,6 +6,16 @@ import (
 	"unsafe"
 )
 
+// CreateSharedNumPyArray creates shared memory with metadata for NumPy array interop.
+// The shared memory includes a header with shape, dtype, and endianness information
+// that Python can use to create a corresponding NumPy array view.
+//
+// Parameters:
+//   - name: Shared memory name (should start with "/" on POSIX)
+//   - shape: Array dimensions (e.g., []int{100, 200} for 100x200)
+//
+// Returns the SharedMemory, total size in bytes, and any error.
+// The data region starts after the metadata header.
 func CreateSharedNumPyArray[T any](name string, shape []int) (*SharedMemory, int, error) {
 	// Calculate total size
 	size := 1
@@ -45,7 +55,8 @@ func CreateSharedNumPyArray[T any](name string, shape []int) (*SharedMemory, int
 	return shm, totalSize, nil
 }
 
-// Helper function to get the data type string
+// GetDType returns the NumPy-compatible dtype string for Go type T.
+// Supported types: float32/64, int8/16/32/64, uint8/16/32/64, complex64/128, bool.
 func GetDType[T any]() string {
 	switch any(new(T)).(type) {
 	case *float32:
@@ -80,7 +91,8 @@ func GetDType[T any]() string {
 	}
 }
 
-// GetDTypeSize returns the size in bytes of a given data type
+// GetDTypeSize returns the size in bytes for a NumPy dtype string.
+// Panics if the dtype is not recognized.
 func GetDTypeSize(dtype string) int {
 	switch dtype {
 	case "float32":

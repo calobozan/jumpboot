@@ -7,8 +7,8 @@ import (
 	"os/exec"
 )
 
-// RunPythonReadCombined runs a Python script and returns the combined standard output and standard error.
-// RunPythonReadCombined blocks until the child process exits.
+// RunPythonReadCombined executes a Python script and returns combined stdout/stderr.
+// This is a blocking call that waits for the script to complete.
 func (env *Environment) RunPythonReadCombined(scriptPath string, args ...string) (string, error) {
 	args = append([]string{scriptPath}, args...)
 	cmd := exec.Command(env.PythonPath, args...)
@@ -19,8 +19,8 @@ func (env *Environment) RunPythonReadCombined(scriptPath string, args ...string)
 	return string(output), nil
 }
 
-// RunPythonReadStdout runs a Python script and returns the standard output.
-// RunPythonReadStdout blocks until the child process exits.
+// RunPythonReadStdout executes a Python script and returns only stdout.
+// This is a blocking call that waits for the script to complete.
 func (env *Environment) RunPythonReadStdout(scriptPath string, args ...string) (string, error) {
 	// put scriptPath at the front of the args
 	retv := ""
@@ -44,8 +44,8 @@ func (env *Environment) RunPythonReadStdout(scriptPath string, args ...string) (
 	return retv, nil
 }
 
-// RunPythonScriptFromFile runs a Python script from a file with the given arguments.
-// RunPythonScriptFromFile blocks until the child process exits.
+// RunPythonScriptFromFile executes a Python script file, printing stderr to stdout.
+// This is a blocking call that waits for the script to complete.
 func (env *Environment) RunPythonScriptFromFile(scriptPath string, args ...string) error {
 	// put scriptPath at the front of the args
 	args = append([]string{scriptPath}, args...)
@@ -76,10 +76,9 @@ func (env *Environment) RunPythonScriptFromFile(scriptPath string, args ...strin
 	return nil
 }
 
-// BoundRunPythonScriptFromFile runs a Python script from a file with the given arguments.
-// It ensures that the child process is terminated if the parent process is killed.
-// BoundRunPythonScriptFromFile blocks until the child process exits.  This is the most
-// general function for running a Python program as a child process.
+// BoundRunPythonScriptFromFile executes a Python script with proper signal handling.
+// If the parent Go process receives a termination signal, the Python child is killed.
+// This is the recommended way to run Python scripts as long-running subprocesses.
 func (env *Environment) BoundRunPythonScriptFromFile(scriptPath string, args ...string) error {
 	// Create the command
 	// put scriptPath at the front of the args

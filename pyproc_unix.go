@@ -13,10 +13,12 @@ import (
 	"syscall"
 )
 
+// setSignalsForChannel configures the channel to receive SIGINT and SIGTERM.
 func setSignalsForChannel(c chan os.Signal) {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 }
 
+// waitForExit waits for a command to exit and returns an appropriate error.
 func waitForExit(cmd *exec.Cmd) error {
 	err := cmd.Wait()
 	if err != nil {
@@ -31,7 +33,8 @@ func waitForExit(cmd *exec.Cmd) error {
 	return nil
 }
 
-// return the file descriptors as numerical strings
+// setExtraFiles attaches extra files to the command and returns their FD numbers.
+// On Unix, extra files start at FD 3 (after stdin=0, stdout=1, stderr=2).
 func setExtraFiles(cmd *exec.Cmd, extraFiles []*os.File) []string {
 	cmd.ExtraFiles = extraFiles
 	retv := make([]string, len(extraFiles))

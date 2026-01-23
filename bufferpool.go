@@ -1,12 +1,14 @@
 package jumpboot
 
-// BufferPool manages a pool of byte slices to reduce allocations
+// BufferPool manages a pool of reusable byte slices to reduce GC pressure.
+// It uses a channel-based design for thread-safe access without locks.
 type BufferPool struct {
 	pool    chan []byte
 	bufSize int
 }
 
-// NewBufferPool creates a new buffer pool with the given buffer size and count
+// NewBufferPool creates a pool pre-populated with count buffers of bufSize bytes.
+// Buffers are retrieved with Get and returned with Put.
 func NewBufferPool(bufSize, count int) *BufferPool {
 	pool := make(chan []byte, count)
 	for i := 0; i < count; i++ {
@@ -18,7 +20,8 @@ func NewBufferPool(bufSize, count int) *BufferPool {
 	}
 }
 
-// Get returns a buffer from the pool or creates a new one if none are available
+// Get returns a buffer from the pool, or allocates a new one if the pool is empty.
+// The returned buffer has capacity bufSize but length may vary.
 func (bp *BufferPool) Get() []byte {
 	select {
 	case buf := <-bp.pool:
@@ -29,7 +32,9 @@ func (bp *BufferPool) Get() []byte {
 	}
 }
 
-// Put returns a buffer to the pool if it's the right size
+// Put returns a buffer to the pool for reuse.
+// Buffers with incorrect capacity are discarded (not returned to pool).
+// If the pool is full, the buffer is discarded for garbage collection.
 func (bp *BufferPool) Put(buf []byte) {
 	if cap(buf) != bp.bufSize {
 		return // Wrong size, don't put it back

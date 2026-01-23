@@ -7,6 +7,16 @@ import (
 	"os/exec"
 )
 
+// PipInstallPackages installs one or more Python packages using pip.
+//
+// Parameters:
+//   - packages: Package names/specifiers (e.g., "numpy", "pandas>=1.0")
+//   - index_url: Custom PyPI index URL; empty string uses default
+//   - extra_index_url: Additional package index; empty string means none
+//   - no_cache: If true, disables pip's cache (useful for CI/CD)
+//   - progressCallback: Optional progress callback; may be nil
+//
+// Returns an error if pip fails, including stderr output for debugging.
 func (env *Environment) PipInstallPackages(packages []string, index_url string, extra_index_url string, no_cache bool, progressCallback ProgressCallback) error {
 	args := []string{
 		"install",
@@ -61,6 +71,8 @@ func (env *Environment) PipInstallPackages(packages []string, index_url string, 
 	return nil
 }
 
+// PipInstallRequirements installs packages from a requirements.txt file.
+// The file should contain one package specifier per line in pip format.
 func (env *Environment) PipInstallRequirements(requirementsPath string, progressCallback ProgressCallback) error {
 	installCmd := exec.Command(env.PipPath, "install", "--no-warn-script-location", "-r", requirementsPath)
 
@@ -94,6 +106,8 @@ func (env *Environment) PipInstallRequirements(requirementsPath string, progress
 	return nil
 }
 
+// PipInstallPackage installs a single Python package using pip.
+// This is a convenience wrapper around PipInstallPackages for single packages.
 func (env *Environment) PipInstallPackage(packageToInstall string, index_url string, extra_index_url string, no_cache bool, progressCallback ProgressCallback) error {
 	packages := []string{
 		packageToInstall,

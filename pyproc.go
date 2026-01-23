@@ -19,83 +19,142 @@ import (
 	"time"
 )
 
-// The file descriptor is passed as an extra file, so it will be after stderr
-//
 //go:embed scripts/bootstrap.py
 var primaryBootstrapScriptTemplate string
 
 //go:embed scripts/secondaryBootstrapScript.py
 var secondaryBootstrapScriptTemplate string
 
-// embed the contents of the jumpboot package folder and any subfolders
-//
 //go:embed packages/jumpboot/* packages/jumpboot/**/*
 var jumpboot_package embed.FS
 
-// ProcOnException is a function that is called when an exception occurs in the Python process
+// ProcOnException is a callback function invoked when a Python exception occurs.
 type ProcOnException func(ex PythonException)
 
-// ProcOnStatus is a function that is called when the Python process sends a status message
+// ProcStatus is a callback function invoked when the Python process sends a status message.
 type ProcStatus func(status string)
 
-// PythonProcess represents a running Python process with its I/O pipes
+// PythonProcess represents a running Python subprocess with communication pipes.
+//
+// The process uses a two-stage bootstrap mechanism: a primary bootstrap script
+// initializes file descriptors and executes the secondary bootstrap, which sets
+// up the custom import system and runs the main program.
+//
+// Communication occurs through multiple channels:
+//   - Stdin/Stdout/Stderr: Standard I/O streams
+//   - PipeIn/PipeOut: Primary data communication pipes
+//   - StatusIn: Status and exception reporting from Python
 type PythonProcess struct {
-	Cmd           *exec.Cmd
-	Stdin         io.WriteCloser
-	Stdout        io.ReadCloser
-	Stderr        io.ReadCloser
-	PipeIn        *os.File
-	PipeOut       *os.File
-	StatusIn      *os.File
+	// Cmd is the underlying exec.Cmd for the Python process.
+	Cmd *exec.Cmd
+
+	// Stdin is the write end of the process's standard input.
+	Stdin io.WriteCloser
+
+	// Stdout is the read end of the process's standard output.
+	Stdout io.ReadCloser
+
+	// Stderr is the read end of the process's standard error.
+	Stderr io.ReadCloser
+
+	// PipeIn is for reading data sent from the Python process.
+	PipeIn *os.File
+
+	// PipeOut is for writing data to the Python process.
+	PipeOut *os.File
+
+	// StatusIn receives status messages and exceptions from Python.
+	StatusIn *os.File
+
+	// ExceptionChan receives Python exceptions reported via the status pipe.
 	ExceptionChan chan *PythonException
-	StatusChan    chan map[string]interface{}
+
+	// StatusChan receives status messages (e.g., "exit") from Python.
+	StatusChan chan map[string]interface{}
 }
 
-// Module represents a Python module
+// Module represents a Python module that can be embedded in a Go binary.
+// The source code is stored as base64-encoded text and decoded by the
+// Python bootstrap script before execution.
 type Module struct {
-	// Name of the module
+	// Name is the module name as it appears in Python imports (e.g., "utils").
 	Name string
-	// Path to the module
+
+	// Path is the virtual file path used for __file__ and tracebacks.
 	Path string
-	// Base64 encoded source code of the module
+
+	// Source is the base64-encoded Python source code.
 	Source string
 }
 
-// Package represents a Python package
+// Package represents a Python package (directory with __init__.py) that can be
+// embedded in a Go binary. Packages can contain modules and nested subpackages.
 type Package struct {
-	// Name of the package
+	// Name is the package name as it appears in Python imports.
 	Name string
-	// Path to the package
+
+	// Path is the virtual directory path for the package.
 	Path string
-	// Modules in the package
+
+	// Modules contains the Python modules in this package.
 	Modules []Module
-	// Subpackages in the package
+
+	// Packages contains nested subpackages.
 	Packages []Package
 }
 
-// PythonProgram represents a Python program with its main module and supporting packages and modules
+// PythonProgram defines a complete Python program to be executed, including
+// the main module, supporting packages, modules, and configuration options.
+//
+// The program is serialized to JSON and passed to the Python bootstrap script,
+// which reconstructs the module hierarchy and executes the main program.
 type PythonProgram struct {
-	Name     string
-	Path     string
-	Program  Module
+	// Name identifies the program (used for logging and debugging).
+	Name string
+
+	// Path is the base path for resolving relative imports.
+	Path string
+
+	// Program is the main module (__main__) to execute.
+	Program Module
+
+	// Packages contains Python packages available for import.
 	Packages []Package
-	Modules  []Module
-	PipeIn   int
-	PipeOut  int
+
+	// Modules contains standalone Python modules available for import.
+	Modules []Module
+
+	// PipeIn is the file descriptor number for reading from Go (set automatically).
+	PipeIn int
+
+	// PipeOut is the file descriptor number for writing to Go (set automatically).
+	PipeOut int
+
+	// StatusIn is the file descriptor for status/exception reporting (set automatically).
 	StatusIn int
-	// DebugPort - setting this to a non-zero value will start the debugpy server on the specified port
-	// and wait for the debugger to attach before running the program in the bootstrap script
-	DebugPort    int
+
+	// DebugPort, if non-zero, starts debugpy on this port and waits for attachment.
+	DebugPort int
+
+	// BreakOnStart, if true with DebugPort set, breaks at the first line of code.
 	BreakOnStart bool
-	KVPairs      map[string]interface{}
+
+	// KVPairs contains key-value data accessible in Python as jumpboot.<key>.
+	KVPairs map[string]interface{}
 }
 
-// Data struct to hold the pipe number
+// TemplateData holds data for rendering the bootstrap script templates.
 type TemplateData struct {
+	// PipeNumber is the file descriptor number for the bootstrap pipe.
 	PipeNumber int
 }
 
-// NewModuleFromPath creates a new module from a file path
+// NewModuleFromPath creates a Module by reading Python source from a file.
+// The source is automatically base64-encoded for embedding.
+//
+// Parameters:
+//   - name: The module name for Python imports
+//   - path: The filesystem path to the .py file
 func NewModuleFromPath(name, path string) (*Module, error) {
 	// load the source file from the path
 	source, err := os.ReadFile(path)
@@ -113,7 +172,13 @@ func NewModuleFromPath(name, path string) (*Module, error) {
 	}, nil
 }
 
-// NewModuleFromString creates a new module from a string
+// NewModuleFromString creates a Module from Python source code provided as a string.
+// The source is automatically base64-encoded for embedding.
+//
+// Parameters:
+//   - name: The module name for Python imports
+//   - original_path: The virtual path used for __file__ in Python
+//   - source: The Python source code as a plain string
 func NewModuleFromString(name, original_path string, source string) *Module {
 	// Trim the "packages/" prefix if it exists
 	path := original_path
@@ -131,7 +196,8 @@ func NewModuleFromString(name, original_path string, source string) *Module {
 	}
 }
 
-// NewPackage creates a new package from a collection of modules
+// NewPackage creates a Package from a collection of already-created modules.
+// For loading packages from the filesystem, use NewPackageFromFS instead.
 func NewPackage(name, path string, modules []Module) *Package {
 	return &Package{
 		Name:    name,
@@ -140,7 +206,8 @@ func NewPackage(name, path string, modules []Module) *Package {
 	}
 }
 
-// fsDirHasInitPy returns true if the fs directory contains a __init__.py file
+// fsDirHasInitPy checks if a directory in an embed.FS contains __init__.py,
+// indicating it's a valid Python package.
 func fsDirHasInitPy(fs embed.FS, path string) bool {
 	// read the directory.  If the directory contains a __init__.py file, then it is a package
 	entries, err := fs.ReadDir(path)
@@ -199,7 +266,21 @@ func newPackageFromFS(name string, sourcepath string, rootpath string, fs embed.
 	return retv, nil
 }
 
-// New Package from an embed.FS containing the package structure and source files
+// NewPackageFromFS creates a Package by recursively loading Python files from an embed.FS.
+// This is the recommended way to embed Python packages in Go binaries.
+//
+// Parameters:
+//   - name: The package name for Python imports
+//   - sourcepath: The source identifier (used internally)
+//   - rootpath: The path within the embed.FS to the package root
+//   - fs: The embedded filesystem containing the Python package
+//
+// Example:
+//
+//	//go:embed packages/mypackage/*
+//	var myPackageFS embed.FS
+//
+//	pkg, err := jumpboot.NewPackageFromFS("mypackage", "mypackage", "packages/mypackage", myPackageFS)
 func NewPackageFromFS(name string, sourcepath string, rootpath string, fs embed.FS) (*Package, error) {
 	// the embedded filesystem should be a directory
 
@@ -223,6 +304,24 @@ func procTemplate(templateStr string, data interface{}) string {
 	return result.String()
 }
 
+// NewPythonProcessFromProgram starts a Python process running the specified program.
+// This is the primary method for launching Python code with the full bootstrap mechanism.
+//
+// The function:
+//  1. Prepends the jumpboot package to the program's packages
+//  2. Creates communication pipes (data, status, bootstrap)
+//  3. Starts Python with the primary bootstrap script
+//  4. Sends the secondary bootstrap and program data
+//  5. Sets up signal handling for clean shutdown
+//
+// Parameters:
+//   - program: The PythonProgram to execute
+//   - environment_vars: Additional environment variables for the process
+//   - extrafiles: Additional file handles to pass to Python
+//   - debug: Currently unused, reserved for future debugging features
+//   - args: Command-line arguments passed to the Python program
+//
+// Returns the PythonProcess, the JSON-encoded program data, and any error.
 func (env *Environment) NewPythonProcessFromProgram(program *PythonProgram, environment_vars map[string]string, extrafiles []*os.File, debug bool, args ...string) (*PythonProcess, []byte, error) {
 	// create the jumpboot package
 	jumpboot_package, err := newPackageFromFS("jumpboot", "jumpboot", "packages/jumpboot", jumpboot_package)
@@ -385,9 +484,18 @@ func (env *Environment) NewPythonProcessFromProgram(program *PythonProgram, envi
 	return pyProcess, programData, nil
 }
 
-// NewPythonProcessFromString starts a Python script from a string with the given arguments.
-// It returns a PythonProcess struct containing the command and I/O pipes.
-// It ensures that the child process is killed if the parent process is killed.
+// NewPythonProcessFromString starts a Python process executing a script provided as a string.
+// This is a simpler alternative to NewPythonProcessFromProgram for quick script execution.
+//
+// The script is passed via a pipe and executed using the primary bootstrap mechanism.
+// Signal handling is configured to terminate the child if the parent is killed.
+//
+// Parameters:
+//   - script: The Python source code to execute
+//   - environment_vars: Additional environment variables for the process
+//   - extrafiles: Additional file handles to pass to Python
+//   - debug: Currently unused, reserved for future debugging features
+//   - args: Command-line arguments accessible via sys.argv
 func (env *Environment) NewPythonProcessFromString(script string, environment_vars map[string]string, extrafiles []*os.File, debug bool, args ...string) (*PythonProcess, error) {
 	// Create a pipe for the secondary bootstrap script
 	// we'll write the script to the writer
@@ -475,7 +583,8 @@ func (env *Environment) NewPythonProcessFromString(script string, environment_va
 	return pyProcess, nil
 }
 
-// Wait waits for the Python process to exit and returns an error if it was killed
+// Wait blocks until the Python process exits.
+// Returns an error if the process was killed or exited with a non-zero status.
 func (pp *PythonProcess) Wait() error {
 	err := pp.Cmd.Wait()
 	if err != nil {
@@ -490,7 +599,9 @@ func (pp *PythonProcess) Wait() error {
 	return nil
 }
 
-// Terminate gracefully stops the Python process
+// Terminate gracefully stops the Python process by sending SIGTERM.
+// If the process doesn't exit within 5 seconds, it is forcefully killed with SIGKILL.
+// Returns nil if the process wasn't running or has already finished.
 func (pp *PythonProcess) Terminate() error {
 	if pp.Cmd.Process == nil {
 		return nil // Process hasn't started or has already finished

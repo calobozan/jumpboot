@@ -12,28 +12,65 @@ import (
 	"time"
 )
 
-// QueueProcess extends PythonProcess with JSON-based bidirectional communication
-// that can directly call methods on Python classes with bidirectional command handling
+// QueueProcess provides bidirectional RPC-style communication between Go and Python.
+// It uses MessagePack serialization over pipes for efficient message passing.
+//
+// QueueProcess supports:
+//   - Calling Python methods from Go with Call() or the fluent On().Do().Call() API
+//   - Registering Go handlers that Python can invoke
+//   - Automatic method discovery from Python
+//   - Request/response correlation with unique IDs
+//   - Timeout support for long-running operations
+//
+// Example:
+//
+//	queue, _ := env.NewQueueProcess(program, nil, nil, nil)
+//	result, _ := queue.Call("process_data", 30, map[string]interface{}{"input": data})
+//	queue.Close()
 type QueueProcess struct {
 	*PythonProcess
+
+	// serializer handles message encoding/decoding (MessagePack)
 	serializer Serializer
-	transport  Transport
-	// reader          *bufio.Reader
-	// writer          *bufio.Writer
-	mutex           sync.Mutex
-	responseMap     map[string]chan map[string]interface{}
+
+	// transport handles the wire protocol (length-prefixed binary)
+	transport Transport
+
+	// mutex protects concurrent access to shared state
+	mutex sync.Mutex
+
+	// responseMap tracks pending requests awaiting responses
+	responseMap map[string]chan map[string]interface{}
+
+	// commandHandlers maps command names to Go handler functions
 	commandHandlers map[string]CommandHandler
-	defaultHandler  CommandHandler
-	nextID          int64
-	idMutex         sync.Mutex
-	methodCache     map[string]MethodInfo
-	running         bool
-	processingWg    sync.WaitGroup
+
+	// defaultHandler is invoked for commands without a specific handler
+	defaultHandler CommandHandler
+
+	// nextID is the counter for generating unique request IDs
+	nextID int64
+
+	// idMutex protects nextID
+	idMutex sync.Mutex
+
+	// methodCache stores discovered Python method metadata
+	methodCache map[string]MethodInfo
+
+	// running indicates whether the message loop is active
+	running bool
+
+	// processingWg tracks in-flight command handlers
+	processingWg sync.WaitGroup
 }
 
-// CommandHandler defines a function type for handling commands from Python
+// CommandHandler is a function that handles commands received from Python.
+// It receives the command data and request ID, and returns a response or error.
+// Handlers are registered with RegisterHandler and invoked by the message loop.
 type CommandHandler func(data interface{}, requestID string) (interface{}, error)
 
+// methodCall represents a fluent builder for calling Python methods.
+// Use QueueProcess.On() to create a methodCall, then chain Do() and Call().
 type methodCall struct {
 	process       *QueueProcess
 	methodName    string
@@ -42,35 +79,59 @@ type methodCall struct {
 	reflectResult bool
 }
 
-// RegisterHandler registers a handler for a specific command
+// RegisterHandler registers a Go function to handle a specific command from Python.
+// When Python sends a command with this name, the handler is invoked with the data.
+// The handler's return value is sent back to Python as the response.
 func (jq *QueueProcess) RegisterHandler(command string, handler CommandHandler) {
 	jq.mutex.Lock()
 	defer jq.mutex.Unlock()
 	jq.commandHandlers[command] = handler
 }
 
-// SetDefaultHandler sets a handler for commands without a specific handler
+// SetDefaultHandler sets a fallback handler for commands without a specific handler.
+// If no handler is registered for a command and no default is set, an error is returned.
 func (jq *QueueProcess) SetDefaultHandler(handler CommandHandler) {
 	jq.mutex.Lock()
 	defer jq.mutex.Unlock()
 	jq.defaultHandler = handler
 }
 
-// MethodInfo represents metadata about an exposed Python method
+// MethodInfo contains metadata about an exposed Python method,
+// discovered via the __get_methods__ introspection command.
 type MethodInfo struct {
-	Parameters []ParameterInfo   `json:"parameters"`
-	Return     map[string]string `json:"return"`
-	Doc        string            `json:"doc"`
+	// Parameters describes the method's parameters.
+	Parameters []ParameterInfo `json:"parameters"`
+
+	// Return contains return type information (if available).
+	Return map[string]string `json:"return"`
+
+	// Doc is the Python docstring for the method.
+	Doc string `json:"doc"`
 }
 
-// ParameterInfo represents metadata about a Python method parameter
+// ParameterInfo describes a single parameter of a Python method.
 type ParameterInfo struct {
-	Name     string `json:"name"`
-	Required bool   `json:"required"`
-	Type     string `json:"type,omitempty"`
+	// Name is the parameter name.
+	Name string `json:"name"`
+
+	// Required indicates if the parameter has no default value.
+	Required bool `json:"required"`
+
+	// Type is the type annotation (if available).
+	Type string `json:"type,omitempty"`
 }
 
-// NewQueueProcess creates a new PythonProcess with message queue communication
+// NewQueueProcess creates a Python process with bidirectional RPC communication.
+//
+// Parameters:
+//   - program: The PythonProgram to execute (should implement the queue protocol)
+//   - serviceStruct: Optional Go struct whose exported methods become command handlers.
+//     Reflection is used to register each method automatically.
+//   - environment_vars: Additional environment variables for the process
+//   - extrafiles: Additional file handles to pass to Python
+//
+// The function starts the message loop automatically and discovers Python methods
+// via introspection. Python stdout/stderr are forwarded to Go's os.Stdout/os.Stderr.
 func (env *Environment) NewQueueProcess(program *PythonProgram, serviceStruct interface{}, environment_vars map[string]string, extrafiles []*os.File) (*QueueProcess, error) {
 	pyProcess, _, err := env.NewPythonProcessFromProgram(program, environment_vars, extrafiles, false)
 	if err != nil {
@@ -236,7 +297,14 @@ func (jq *QueueProcess) discoverMethods() error {
 	return nil
 }
 
-// Call dynamically calls a Python method by name with the provided arguments
+// Call invokes a Python method by name and returns the result.
+//
+// Parameters:
+//   - methodName: The Python method to call
+//   - timeoutSeconds: Maximum seconds to wait (0 for unlimited)
+//   - args: Arguments to pass (typically a map or slice)
+//
+// Returns the result from Python, or an error if the call failed or timed out.
 func (jq *QueueProcess) Call(methodName string, timeoutSeconds int, args interface{}) (interface{}, error) {
 	response, err := jq.SendCommand(methodName, args, timeoutSeconds, true)
 	if err != nil {
@@ -263,7 +331,8 @@ func (jq *QueueProcess) Call(methodName string, timeoutSeconds int, args interfa
 	return response, nil
 }
 
-// GetMethods returns a list of exposed Python methods
+// GetMethods returns the names of all discovered Python methods.
+// Methods are discovered during NewQueueProcess via introspection.
 func (jq *QueueProcess) GetMethods() []string {
 	var methods []string
 	for name := range jq.methodCache {
@@ -272,13 +341,15 @@ func (jq *QueueProcess) GetMethods() []string {
 	return methods
 }
 
-// GetMethodInfo returns information about a specific method
+// GetMethodInfo returns metadata about a specific Python method.
+// Returns the MethodInfo and true if found, or an empty MethodInfo and false if not.
 func (jq *QueueProcess) GetMethodInfo(methodName string) (MethodInfo, bool) {
 	info, ok := jq.methodCache[methodName]
 	return info, ok
 }
 
-// Start begins processing messages
+// Start begins the message processing loop.
+// This is called automatically by NewQueueProcess; manual calls are idempotent.
 func (jq *QueueProcess) Start() {
 	jq.mutex.Lock()
 	if jq.running {
@@ -292,7 +363,9 @@ func (jq *QueueProcess) Start() {
 	go jq.messageLoop()
 }
 
-// messageLoop reads and processes incoming messages
+// messageLoop continuously reads messages from Python and dispatches them.
+// Responses to Go requests are routed via responseMap; commands from Python
+// are handled by registered handlers in separate goroutines.
 func (jq *QueueProcess) messageLoop() {
 	for {
 		jq.mutex.Lock()
@@ -352,7 +425,9 @@ func (jq *QueueProcess) messageLoop() {
 	}
 }
 
-// processCommand handles a command received from Python
+// processCommand dispatches a command from Python to the appropriate handler.
+// If a handler is registered for the command, it's invoked; otherwise the default
+// handler is used. The response is sent back to Python with the matching requestID.
 func (jq *QueueProcess) processCommand(command string, data interface{}, requestID string) {
 	var response interface{}
 	var err error
@@ -457,9 +532,15 @@ func (jq *QueueProcess) sendMessage(message map[string]interface{}) error {
 	return nil
 }
 
-// SendCommand with error handling
-// If waitForResponse is true, the function will wait for a response with the given timeout
-// If timeout is 0, the function will wait indefinitely for a response
+// SendCommand sends a command to Python with optional response waiting.
+//
+// Parameters:
+//   - command: The command name (method name in Python)
+//   - data: The command arguments
+//   - timeoutSeconds: Maximum seconds to wait (0 for unlimited, ignored if not waiting)
+//   - waitForResponse: If true, blocks until Python responds
+//
+// Returns the response map (if waiting) or nil, and any error encountered.
 func (jq *QueueProcess) SendCommand(command string, data interface{}, timeoutSeconds int, waitForResponse bool) (map[string]interface{}, error) {
 	requestID := jq.generateRequestID()
 	request := map[string]interface{}{
@@ -503,7 +584,9 @@ func (jq *QueueProcess) SendCommand(command string, data interface{}, timeoutSec
 	}
 }
 
-// Close cleans up resources used by the QueueProcess
+// Close stops the message loop and terminates the Python process.
+// It sends an "exit" command to Python (without waiting for response) and
+// then forcefully terminates the process after a brief delay.
 func (jq *QueueProcess) Close() error {
 	// Signal that we're closing
 	jq.mutex.Lock()
@@ -525,6 +608,9 @@ func (jq *QueueProcess) Close() error {
 	return jq.PythonProcess.Terminate()
 }
 
+// Shutdown gracefully stops the QueueProcess by sending a "shutdown" command
+// and waiting for Python to exit cleanly. Use this instead of Close when you
+// need to ensure Python completes any cleanup operations.
 func (jq *QueueProcess) Shutdown() error {
 	// Send shutdown command and wait for response
 	resp, err := jq.SendCommand("shutdown", nil, 0, true)
@@ -538,7 +624,10 @@ func (jq *QueueProcess) Shutdown() error {
 	return jq.PythonProcess.Wait()
 }
 
-// On specifies the Python method to be called.
+// On begins a fluent method call chain for the specified Python method.
+// Use Do() to add arguments and Call() to execute:
+//
+//	result, err := queue.On("process").Do("input", data, "verbose", true).Call()
 func (jq *QueueProcess) On(methodName string) *methodCall {
 	return &methodCall{
 		process:    jq,
@@ -548,10 +637,12 @@ func (jq *QueueProcess) On(methodName string) *methodCall {
 	}
 }
 
-// Do adds arguments to the method call.
-// It accepts a variadic number of arguments, where every odd argument is
-// expected to be a string (the parameter name) and every even argument is
-// the corresponding value.
+// Do adds named arguments to the method call as key-value pairs.
+// Arguments must be provided as alternating string keys and values:
+//
+//	.Do("name", "Alice", "age", 30, "active", true)
+//
+// Panics if the number of arguments is odd or if keys are not strings.
 func (mc *methodCall) Do(args ...interface{}) *methodCall {
 	if len(args)%2 != 0 {
 		panic("invalid number of arguments: must be even")
@@ -568,13 +659,15 @@ func (mc *methodCall) Do(args ...interface{}) *methodCall {
 	return mc
 }
 
-// WithTimeout sets a timeout for the method call.
+// WithTimeout sets the maximum duration to wait for the method to complete.
+// A zero timeout means wait indefinitely.
 func (mc *methodCall) WithTimeout(timeout time.Duration) *methodCall {
 	mc.timeout = timeout
 	return mc
 }
 
-// Call executes the Python method with the provided arguments and timeout.
+// Call executes the Python method and returns the result.
+// The method is called with arguments added via Do() and the timeout set via WithTimeout().
 func (mc *methodCall) Call() (interface{}, error) {
 	// ... (Add validation for parameter names and types here, potentially using GetMethodInfo)
 
@@ -589,8 +682,14 @@ func (mc *methodCall) Call() (interface{}, error) {
 	return extractResult(response, err)
 }
 
-// CallReflect executes the Python method and attempts to map the result to a Go value
-// using reflection. The target must be a pointer to a value.
+// CallReflect executes the Python method and unmarshals the result into target.
+// Target must be a non-nil pointer. For complex types, JSON marshaling/unmarshaling
+// is used to handle nested structures.
+//
+// Example:
+//
+//	var users []User
+//	err := queue.On("get_users").CallReflect(&users)
 func (mc *methodCall) CallReflect(target interface{}) error {
 	// Get the raw result
 	result, err := mc.Call()
@@ -637,7 +736,7 @@ func (mc *methodCall) CallReflect(target interface{}) error {
 	return nil
 }
 
-// Helper function to extract the result or error from the response
+// extractResult extracts the result value from a Python response, handling errors.
 func extractResult(response map[string]interface{}, err error) (interface{}, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error calling Python method: %w", err)
