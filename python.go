@@ -9,7 +9,7 @@ import (
 
 // RunPythonReadCombined executes a Python script and returns combined stdout/stderr.
 // This is a blocking call that waits for the script to complete.
-func (env *Environment) RunPythonReadCombined(scriptPath string, args ...string) (string, error) {
+func (env *PythonEnvironment) RunPythonReadCombined(scriptPath string, args ...string) (string, error) {
 	args = append([]string{scriptPath}, args...)
 	cmd := exec.Command(env.PythonPath, args...)
 	output, err := cmd.CombinedOutput()
@@ -21,7 +21,7 @@ func (env *Environment) RunPythonReadCombined(scriptPath string, args ...string)
 
 // RunPythonReadStdout executes a Python script and returns only stdout.
 // This is a blocking call that waits for the script to complete.
-func (env *Environment) RunPythonReadStdout(scriptPath string, args ...string) (string, error) {
+func (env *PythonEnvironment) RunPythonReadStdout(scriptPath string, args ...string) (string, error) {
 	// put scriptPath at the front of the args
 	retv := ""
 	args = append([]string{scriptPath}, args...)
@@ -46,7 +46,7 @@ func (env *Environment) RunPythonReadStdout(scriptPath string, args ...string) (
 
 // RunPythonScriptFromFile executes a Python script file, printing stderr to stdout.
 // This is a blocking call that waits for the script to complete.
-func (env *Environment) RunPythonScriptFromFile(scriptPath string, args ...string) error {
+func (env *PythonEnvironment) RunPythonScriptFromFile(scriptPath string, args ...string) error {
 	// put scriptPath at the front of the args
 	args = append([]string{scriptPath}, args...)
 	cmd := exec.Command(env.PythonPath, args...)
@@ -79,7 +79,7 @@ func (env *Environment) RunPythonScriptFromFile(scriptPath string, args ...strin
 // BoundRunPythonScriptFromFile executes a Python script with proper signal handling.
 // If the parent Go process receives a termination signal, the Python child is killed.
 // This is the recommended way to run Python scripts as long-running subprocesses.
-func (env *Environment) BoundRunPythonScriptFromFile(scriptPath string, args ...string) error {
+func (env *PythonEnvironment) BoundRunPythonScriptFromFile(scriptPath string, args ...string) error {
 	// Create the command
 	// put scriptPath at the front of the args
 	args = append([]string{scriptPath}, args...)

@@ -150,7 +150,7 @@ func ExpectMicromamba(binFolder string, progressCallback ProgressCallback) (stri
 //
 // The installation is performed with --no-rc to avoid configuration conflicts
 // and uses the environment's prefix directly.
-func (env *Environment) MicromambaInstallPackage(packageToInstall string, channel string) error {
+func (env *PythonEnvironment) MicromambaInstallPackage(packageToInstall string, channel string) error {
 	var installCmd *exec.Cmd
 	if channel != "" {
 		/*

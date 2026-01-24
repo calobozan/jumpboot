@@ -2,6 +2,9 @@ package jumpboot
 
 // BufferPool manages a pool of reusable byte slices to reduce GC pressure.
 // It uses a channel-based design for thread-safe access without locks.
+//
+// BufferPool is safe for concurrent use by multiple goroutines. The channel-based
+// implementation provides lock-free synchronization for both Get and Put operations.
 type BufferPool struct {
 	pool    chan []byte
 	bufSize int

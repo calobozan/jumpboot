@@ -40,7 +40,7 @@ func mockProgressCallback(message string, current, total int64) {
 }
 
 // isValidEnvironment checks if the environment object has necessary paths set.
-func isValidEnvironment(t *testing.T, env *Environment) {
+func isValidEnvironment(t *testing.T, env *PythonEnvironment) {
 	t.Helper()
 	if env.PythonPath == "" {
 		t.Error("PythonPath is empty")
@@ -75,8 +75,8 @@ func TestCreateEnvironmentMamba(t *testing.T) {
 		t.Fatalf("CreateEnvironmentMamba failed: %v", err)
 	}
 
-	if env.Name != envName {
-		t.Errorf("Expected environment name %s, got %s", envName, env.Name)
+	if env.Name() != envName {
+		t.Errorf("Expected environment name %s, got %s", envName, env.Name())
 	}
 	if env.RootDir != testDir {
 		t.Errorf("Expected root directory %s, got %s", testDir, env.RootDir)
@@ -128,8 +128,8 @@ func TestCreateEnvironmentFromSystem(t *testing.T) {
 	}
 
 	isValidEnvironment(t, env)
-	if env.Name != "system" {
-		t.Errorf("Expected environment name 'system', got '%s'", env.Name)
+	if env.Name() != "system" {
+		t.Errorf("Expected environment name 'system', got '%s'", env.Name())
 	}
 	if env.IsNew {
 		t.Error("System environment should not be marked as new")
@@ -164,8 +164,8 @@ func TestCreateVenvEnvironment(t *testing.T) {
 
 	isValidEnvironment(t, venvEnv)
 
-	if venvEnv.Name != "testvenv" {
-		t.Errorf("Expected venv name 'testvenv', got '%s'", venvEnv.Name)
+	if venvEnv.Name() != "testvenv" {
+		t.Errorf("Expected venv name 'testvenv', got '%s'", venvEnv.Name())
 	}
 
 	// Test with clear option
@@ -174,8 +174,8 @@ func TestCreateVenvEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateVenvEnvironment with Clear option failed: %v", err)
 	}
-	if venvEnv2.Name != "testvenv" {
-		t.Errorf("Expected venv name 'testvenv', got '%s'", venvEnv2.Name)
+	if venvEnv2.Name() != "testvenv" {
+		t.Errorf("Expected venv name 'testvenv', got '%s'", venvEnv2.Name())
 	}
 
 	// Test with no pip
@@ -204,7 +204,7 @@ func TestCreateVenvEnvironment(t *testing.T) {
 
 	// Test error paths:
 	// Using an invalid python executable to create venv should fail.
-	_, err = CreateVenvEnvironment(&Environment{PythonPath: "/invalid/python"}, venvPath, options, nil)
+	_, err = CreateVenvEnvironment(&PythonEnvironment{PythonPath: "/invalid/python"}, venvPath, options, nil)
 	if err == nil {
 		t.Error("Expected error when base environment has an invalid python path.")
 	}
@@ -288,11 +288,11 @@ func TestRunReadStdout_Success(t *testing.T) {
 	}
 }
 
-func InstallPipPackage(env *Environment, packageName string) error {
+func InstallPipPackage(env *PythonEnvironment, packageName string) error {
 	return env.PipInstallPackage(packageName, "https://pypi.org/simple", "", true, mockProgressCallback) // Use mockProgressCallback
 }
 
-func InstallMicromambaPackage(env *Environment, packageName string) error {
+func InstallMicromambaPackage(env *PythonEnvironment, packageName string) error {
 	return env.MicromambaInstallPackage(packageName, "conda-forge") //conda-forge for consistency
 }
 

@@ -29,7 +29,7 @@ func main() {
 		fmt.Printf("Error creating environment: %v\n", err)
 		return
 	}
-	fmt.Printf("Created environment: %s\n", env.Name)
+	fmt.Printf("Created environment: %s\n", env.Name())
 
 	if env.IsNew {
 		// install mlx requirements for apple silicon MLX

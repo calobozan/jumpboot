@@ -14,15 +14,29 @@ import (
 	"strings"
 )
 
-// Environment represents a Python environment with all necessary paths and version
-// information. It can be created from micromamba, system Python, a virtual environment,
-// or restored from a JSON specification file.
-//
-// The Environment struct provides methods for running Python scripts, creating
-// Python processes, and installing packages via pip or micromamba.
-type Environment struct {
-	// Name is the identifier for this environment (e.g., "myenv", "system").
-	Name string
+// Runtime defines common operations for any language runtime environment.
+// This interface allows code to work with different runtime types (Python, Node.js, etc.)
+// in a uniform way.
+type Runtime interface {
+	// Name returns the environment identifier.
+	Name() string
+
+	// Path returns the base environment path.
+	Path() string
+
+	// BinPath returns the path to executables.
+	BinPath() string
+
+	// Freeze serializes the environment to a file for reproducibility.
+	Freeze(filePath string) error
+}
+
+// BaseEnvironment contains common fields for any conda-managed environment.
+// This is embedded in runtime-specific environment types like PythonEnvironment.
+// It provides the foundation for container management independent of the runtime.
+type BaseEnvironment struct {
+	// EnvironmentName is the identifier for this environment (e.g., "myenv", "system").
+	EnvironmentName string
 
 	// RootDir is the root directory containing the environment and micromamba binary.
 	RootDir string
@@ -36,18 +50,33 @@ type Environment struct {
 	// EnvLibPath is the path to the lib directory within the environment.
 	EnvLibPath string
 
-	// PythonVersion is the detected Python version (e.g., 3.10.12).
-	PythonVersion Version
-
 	// MicromambaVersion is the version of micromamba, if applicable.
 	MicromambaVersion Version
-
-	// PipVersion is the detected pip version.
-	PipVersion Version
 
 	// MicromambaPath is the full path to the micromamba executable.
 	// Empty for system Python or venv environments.
 	MicromambaPath string
+
+	// IsNew indicates whether this environment was newly created (true)
+	// or already existed (false).
+	IsNew bool
+}
+
+// PythonEnvironment represents a Python environment with all necessary paths and version
+// information. It can be created from micromamba, system Python, a virtual environment,
+// or restored from a JSON specification file.
+//
+// The PythonEnvironment struct provides methods for running Python scripts, creating
+// Python processes, and installing packages via pip or micromamba.
+type PythonEnvironment struct {
+	// BaseEnvironment contains container-agnostic fields.
+	BaseEnvironment
+
+	// PythonVersion is the detected Python version (e.g., 3.10.12).
+	PythonVersion Version
+
+	// PipVersion is the detected pip version.
+	PipVersion Version
 
 	// PythonPath is the full path to the Python executable.
 	PythonPath string
@@ -64,10 +93,30 @@ type Environment struct {
 
 	// SitePackagesPath is the path to the site-packages directory.
 	SitePackagesPath string
+}
 
-	// IsNew indicates whether this environment was newly created (true)
-	// or already existed (false).
-	IsNew bool
+// Name returns the environment identifier.
+// Implements the Runtime interface.
+func (env *PythonEnvironment) Name() string {
+	return env.EnvironmentName
+}
+
+// Path returns the base environment path.
+// Implements the Runtime interface.
+func (env *PythonEnvironment) Path() string {
+	return env.EnvPath
+}
+
+// BinPath returns the path to executables.
+// Implements the Runtime interface.
+func (env *PythonEnvironment) BinPath() string {
+	return env.EnvBinPath
+}
+
+// Freeze serializes the environment to a file for reproducibility.
+// Implements the Runtime interface. This is an alias for FreezeToFile.
+func (env *PythonEnvironment) Freeze(filePath string) error {
+	return env.FreezeToFile(filePath)
 }
 
 // VenvOptions configures the creation of a Python virtual environment.
@@ -98,6 +147,26 @@ type VenvOptions struct {
 	UpgradeDeps bool
 }
 
+// PackageSpec represents a package with optional integrity verification.
+// It provides a structured way to specify packages with version pinning
+// and optional SHA256 checksums for security.
+type PackageSpec struct {
+	// Name is the package name.
+	Name string `json:"name"`
+
+	// Version is the package version.
+	Version string `json:"version"`
+
+	// Build is the build string (conda packages only).
+	Build string `json:"build,omitempty"`
+
+	// SHA256 is the optional SHA256 checksum for integrity verification.
+	SHA256 string `json:"sha256,omitempty"`
+
+	// Source indicates where the package came from ("conda" or "pip").
+	Source string `json:"source,omitempty"`
+}
+
 // EnvironmentSpec represents a complete environment specification that can be
 // serialized to JSON and used to recreate an identical environment.
 // This is the format used by FreezeToFile and CreateEnvironmentFromJSONFile.
@@ -109,16 +178,32 @@ type EnvironmentSpec struct {
 	Channels []string `json:"channels,omitempty"`
 
 	// CondaPackages lists conda packages in "name=version=build" format.
-	CondaPackages []string `json:"conda_packages"`
+	// Deprecated: Use Packages with Source="conda" instead.
+	CondaPackages []string `json:"conda_packages,omitempty"`
 
 	// PipPackages lists pip packages in "name==version" format.
-	PipPackages []string `json:"pip_packages"`
+	// Deprecated: Use Packages with Source="pip" instead.
+	PipPackages []string `json:"pip_packages,omitempty"`
+
+	// Packages is the unified package list with optional checksums.
+	// This is the preferred format for new environment specs.
+	Packages []PackageSpec `json:"packages,omitempty"`
 
 	// PythonVersion specifies the Python version (e.g., "3.10").
 	PythonVersion string `json:"python_version,omitempty"`
 
 	// MicromambaVersion optionally specifies the micromamba version used.
 	MicromambaVersion string `json:"micromamba_version,omitempty"`
+}
+
+// RestoreOptions configures how environments are restored from specification files.
+type RestoreOptions struct {
+	// VerifyChecksums enables SHA256 verification for packages that have checksums.
+	VerifyChecksums bool
+
+	// Strict fails the restore if any package with a checksum fails verification,
+	// or if VerifyChecksums is true and a package lacks a checksum.
+	Strict bool
 }
 
 // CreateEnvironmentOptions specifies feedback verbosity during environment creation.
@@ -155,7 +240,7 @@ const (
 //
 // Returns an error if the architecture is unsupported, the directory is not writable,
 // or the requested Python version cannot be satisfied.
-func CreateEnvironmentMamba(envName string, rootDir string, pythonVersion string, channel string, progressCallback ProgressCallback) (*Environment, error) {
+func CreateEnvironmentMamba(envName string, rootDir string, pythonVersion string, channel string, progressCallback ProgressCallback) (*PythonEnvironment, error) {
 	if pythonVersion == "" {
 		pythonVersion = "3.10"
 	}
@@ -202,10 +287,12 @@ func CreateEnvironmentMamba(envName string, rootDir string, pythonVersion string
 	}
 
 	// Create the environment object
-	env := &Environment{
-		Name:           envName,
-		RootDir:        rootDir,
-		MicromambaPath: filepath.Join(binDirectory, executableName),
+	env := &PythonEnvironment{
+		BaseEnvironment: BaseEnvironment{
+			EnvironmentName: envName,
+			RootDir:         rootDir,
+			MicromambaPath:  filepath.Join(binDirectory, executableName),
+		},
 	}
 
 	// Check if binDirectory already has micromamba by getting its version
@@ -233,13 +320,13 @@ func CreateEnvironmentMamba(envName string, rootDir string, pythonVersion string
 	}
 
 	// check if the environment exists
-	envPath := filepath.Join(env.RootDir, "envs", env.Name)
+	envPath := filepath.Join(env.RootDir, "envs", env.EnvironmentName)
 	if _, err := os.Stat(envPath); os.IsNotExist(err) {
 		// this is a new environment
 		env.IsNew = true
 
 		// Create a new Python environment with micromamba
-		cmdargs := []string{"--root-prefix", env.RootDir, "create", "-n", env.Name, "python=" + pythonVersion, "-y"}
+		cmdargs := []string{"--root-prefix", env.RootDir, "create", "-n", env.EnvironmentName, "python=" + pythonVersion, "-y"}
 		if channel != "" {
 			cmdargs = append(cmdargs, "-c", channel)
 		}
@@ -278,30 +365,30 @@ func CreateEnvironmentMamba(envName string, rootDir string, pythonVersion string
 	// Construct the full paths to the Python and pip executables within the created environment
 	env.EnvPath = envPath
 	if platform == "windows" {
-		env.EnvBinPath = filepath.Join(env.RootDir, "envs", env.Name)
+		env.EnvBinPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName)
 		env.PythonPath = filepath.Join(env.EnvBinPath, "python.exe")
-		env.PipPath = filepath.Join(env.RootDir, "envs", env.Name, "Scripts", "pip.exe")
+		env.PipPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName, "Scripts", "pip.exe")
 	} else {
-		env.EnvBinPath = filepath.Join(env.RootDir, "envs", env.Name, "bin")
+		env.EnvBinPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName, "bin")
 		env.PythonPath = filepath.Join(env.EnvBinPath, "python")
 		env.PipPath = filepath.Join(env.EnvBinPath, "pip")
 	}
 
-	env.SitePackagesPath = filepath.Join(env.RootDir, "envs", env.Name, "lib", "python"+requestedVersion.MinorString(), "site-packages")
+	env.SitePackagesPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName, "lib", "python"+requestedVersion.MinorString(), "site-packages")
 
 	// find the python lib path
-	env.EnvLibPath = filepath.Join(env.RootDir, "envs", env.Name, "lib")
+	env.EnvLibPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName, "lib")
 	env.PythonLibPath = env.EnvLibPath
 	if platform == "windows" {
-		env.PythonLibPath = filepath.Join(env.RootDir, "envs", env.Name, "python"+requestedVersion.MinorStringCompact()+".dll")
+		env.PythonLibPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName, "python"+requestedVersion.MinorStringCompact()+".dll")
 	} else if platform == "darwin" {
-		env.PythonLibPath = filepath.Join(env.RootDir, "envs", env.Name, "lib", "libpython"+requestedVersion.MinorString()+".dylib")
+		env.PythonLibPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName, "lib", "libpython"+requestedVersion.MinorString()+".dylib")
 	} else {
-		env.PythonLibPath = filepath.Join(env.RootDir, "envs", env.Name, "lib", "libpython"+requestedVersion.MinorString()+".so")
+		env.PythonLibPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName, "lib", "libpython"+requestedVersion.MinorString()+".so")
 	}
 
 	// find the python headers path
-	env.PythonHeadersPath = filepath.Join(env.RootDir, "envs", env.Name, "include", "python"+requestedVersion.MinorString())
+	env.PythonHeadersPath = filepath.Join(env.RootDir, "envs", env.EnvironmentName, "include", "python"+requestedVersion.MinorString())
 
 	// Check if the Python executable exists and get its version
 	pver, err := RunReadStdout(env.PythonPath, "--version")
@@ -335,18 +422,20 @@ func CreateEnvironmentMamba(envName string, rootDir string, pythonVersion string
 	return env, nil
 }
 
-// CreateEnvironmentFromExacutable creates an Environment from an existing Python executable.
+// CreateEnvironmentFromExacutable creates a PythonEnvironment from an existing Python executable.
 // This is useful when you have a specific Python installation you want to use.
 //
 // The function queries the Python executable to determine version information,
 // site-packages path, pip location, and other environment details.
 //
 // Note: The function name contains a typo ("Exacutable") for backwards compatibility.
-func CreateEnvironmentFromExacutable(pythonPath string) (*Environment, error) {
-	env := &Environment{
-		Name:    "system",
-		RootDir: "", // Will be set based on the system Python path
-		IsNew:   false,
+func CreateEnvironmentFromExacutable(pythonPath string) (*PythonEnvironment, error) {
+	env := &PythonEnvironment{
+		BaseEnvironment: BaseEnvironment{
+			EnvironmentName: "system",
+			RootDir:         "", // Will be set based on the system Python path
+			IsNew:           false,
+		},
 	}
 
 	env.PythonPath = pythonPath
@@ -450,14 +539,14 @@ func CreateEnvironmentFromExacutable(pythonPath string) (*Environment, error) {
 	return env, nil
 }
 
-// CreateEnvironmentFromSystem creates an Environment using the system Python installation.
+// CreateEnvironmentFromSystem creates a PythonEnvironment using the system Python installation.
 //
 // On Unix systems, it searches for "python3" then "python" using exec.LookPath.
 // On Windows, it first tries "py.exe" (Python launcher), then searches for "python"
 // while filtering out the Microsoft Store placeholder executables.
 //
 // Returns an error if no Python installation is found.
-func CreateEnvironmentFromSystem() (*Environment, error) {
+func CreateEnvironmentFromSystem() (*PythonEnvironment, error) {
 	pythonPath := ""
 	if runtime.GOOS == "windows" {
 		// windows is a gruesome OS, so we need to hunt for the correct python executable
@@ -517,7 +606,7 @@ func CreateEnvironmentFromSystem() (*Environment, error) {
 // or reused depending on options.Upgrade.
 //
 // Returns an error if baseEnv is nil or venv creation fails.
-func CreateVenvEnvironment(baseEnv *Environment, venvPath string, options VenvOptions, progressCallback ProgressCallback) (*Environment, error) {
+func CreateVenvEnvironment(baseEnv *PythonEnvironment, venvPath string, options VenvOptions, progressCallback ProgressCallback) (*PythonEnvironment, error) {
 	if baseEnv == nil {
 		return nil, fmt.Errorf("base environment is nil")
 	}
@@ -528,11 +617,13 @@ func CreateVenvEnvironment(baseEnv *Environment, venvPath string, options VenvOp
 		envExists = true
 	}
 
-	// Create a new Environment object
-	newEnv := &Environment{
-		Name:    filepath.Base(venvPath),
-		RootDir: venvPath,
-		IsNew:   !envExists || options.Clear, // Set IsNew if the env doesn't exist or if clear is true
+	// Create a new PythonEnvironment object
+	newEnv := &PythonEnvironment{
+		BaseEnvironment: BaseEnvironment{
+			EnvironmentName: filepath.Base(venvPath),
+			RootDir:         venvPath,
+			IsNew:           !envExists || options.Clear, // Set IsNew if the env doesn't exist or if clear is true
+		},
 	}
 
 	// Prepare venv command arguments
@@ -697,9 +788,9 @@ func CreateVenvEnvironment(baseEnv *Environment, venvPath string, options VenvOp
 // recreate an identical environment.
 //
 // File URLs in pip freeze output are cleaned to show only package names.
-func (env *Environment) FreezeToFile(filePath string) error {
+func (env *PythonEnvironment) FreezeToFile(filePath string) error {
 	spec := EnvironmentSpec{
-		Name:          env.Name,
+		Name:          env.EnvironmentName,
 		CondaPackages: []string{},
 		PipPackages:   []string{},
 		PythonVersion: env.PythonVersion.MinorString(),
@@ -753,7 +844,7 @@ func (env *Environment) FreezeToFile(filePath string) error {
 
 	// 2. Get conda packages (if micromamba is available).
 	if env.MicromambaPath != "" {
-		cmd := exec.Command(env.MicromambaPath, "list", "-n", env.Name, "--json")
+		cmd := exec.Command(env.MicromambaPath, "list", "-n", env.EnvironmentName, "--json")
 		cmd.Env = append(os.Environ(), "MAMBA_ROOT_PREFIX="+env.RootDir)
 		output, err := cmd.Output()
 		if err != nil {
@@ -837,7 +928,7 @@ func (env *Environment) FreezeToFile(filePath string) error {
 //
 // If no channels are specified in the JSON, "conda-forge" is used as the default.
 // The environment is created at rootDir/envs/<name> where name comes from the spec.
-func CreateEnvironmentFromJSONFile(filePath string, rootDir string, progressCallback ProgressCallback) (*Environment, error) {
+func CreateEnvironmentFromJSONFile(filePath string, rootDir string, progressCallback ProgressCallback) (*PythonEnvironment, error) {
 	// 1. Read the JSON file.
 	jsonData, err := os.ReadFile(filePath)
 	if err != nil {
@@ -886,6 +977,119 @@ func CreateEnvironmentFromJSONFile(filePath string, rootDir string, progressCall
 	if len(spec.PipPackages) > 0 {
 		if err := env.PipInstallPackages(spec.PipPackages, "https://pypi.org/simple", "", true, progressCallback); err != nil {
 			return nil, fmt.Errorf("error installing pip packages: %v", err)
+		}
+	}
+
+	if progressCallback != nil {
+		progressCallback("Finished creating environment from JSON file", 100, 100)
+	}
+	return env, nil
+}
+
+// CreateEnvironmentFromJSONFileWithOptions creates a new environment from a JSON
+// specification file with additional security options for checksum verification.
+//
+// This function extends CreateEnvironmentFromJSONFile with optional SHA256 verification
+// for packages that include checksums in their PackageSpec.
+//
+// Parameters:
+//   - filePath: Path to the JSON specification file
+//   - rootDir: Root directory where the environment will be created
+//   - opts: RestoreOptions controlling checksum verification behavior
+//   - progressCallback: Optional callback for progress updates; may be nil
+//
+// If opts.VerifyChecksums is true, packages with SHA256 checksums will be verified.
+// If opts.Strict is also true, the function will fail if any package lacks a checksum.
+func CreateEnvironmentFromJSONFileWithOptions(filePath string, rootDir string, opts RestoreOptions, progressCallback ProgressCallback) (*PythonEnvironment, error) {
+	// 1. Read the JSON file.
+	jsonData, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error reading JSON file: %v", err)
+	}
+
+	// 2. Unmarshal the JSON data into an EnvironmentSpec.
+	var spec EnvironmentSpec
+	if err := json.Unmarshal(jsonData, &spec); err != nil {
+		return nil, fmt.Errorf("error unmarshaling JSON: %v", err)
+	}
+
+	// 3. If Strict mode and VerifyChecksums enabled, check that all packages have checksums.
+	if opts.Strict && opts.VerifyChecksums {
+		for _, pkg := range spec.Packages {
+			if pkg.SHA256 == "" {
+				return nil, fmt.Errorf("strict mode: package %s lacks SHA256 checksum", pkg.Name)
+			}
+		}
+	}
+
+	// 4. Create the base environment.
+	env, err := CreateEnvironmentMamba(spec.Name, rootDir, spec.PythonVersion, "", progressCallback)
+	if err != nil {
+		return nil, fmt.Errorf("error creating base environment: %v", err)
+	}
+
+	// Determine the channels to use.
+	channels := spec.Channels
+	if len(channels) == 0 {
+		channels = []string{"conda-forge"}
+	}
+
+	// 5. Install packages from the unified Packages list if present.
+	for _, pkg := range spec.Packages {
+		if pkg.Source == "conda" {
+			// Install conda package
+			pkgSpec := pkg.Name + "=" + pkg.Version
+			if pkg.Build != "" {
+				pkgSpec += "=" + pkg.Build
+			}
+			var installErr error
+			for _, channel := range channels {
+				if err := env.MicromambaInstallPackage(pkgSpec, channel); err == nil {
+					installErr = nil
+					break
+				} else {
+					installErr = err
+				}
+			}
+			if installErr != nil {
+				return nil, fmt.Errorf("error installing conda package %s: %v", pkg.Name, installErr)
+			}
+		} else if pkg.Source == "pip" {
+			// Install pip package
+			pkgSpec := pkg.Name + "==" + pkg.Version
+			if err := env.PipInstallPackage(pkgSpec, "https://pypi.org/simple", "", true, progressCallback); err != nil {
+				return nil, fmt.Errorf("error installing pip package %s: %v", pkg.Name, err)
+			}
+		}
+
+		if progressCallback != nil {
+			progressCallback(fmt.Sprintf("Installing package %s...", pkg.Name), 50, 100)
+		}
+	}
+
+	// 6. Fall back to legacy format if Packages list is empty.
+	if len(spec.Packages) == 0 {
+		// Install conda packages from legacy format.
+		for _, pkg := range spec.CondaPackages {
+			var installErr error
+			for _, channel := range channels {
+				if err := env.MicromambaInstallPackage(pkg, channel); err == nil {
+					installErr = nil
+					break
+				} else {
+					installErr = err
+				}
+			}
+			if installErr != nil {
+				return nil, fmt.Errorf("error installing conda package %s: %v", pkg, installErr)
+			}
+		}
+
+		// Install pip packages from legacy format.
+		if len(spec.PipPackages) > 0 {
+			if err := env.PipInstallPackages(spec.PipPackages, "https://pypi.org/simple", "", true, progressCallback); err != nil {
+				return nil, fmt.Errorf("error installing pip packages: %v", err)
+			}
 		}
 	}
 

@@ -1,108 +1,177 @@
-# Jumpboot: Seamless Python Environment Management for Go
+# Jumpboot
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/richinsley/jumpboot.svg)](https://pkg.go.dev/github.com/richinsley/jumpboot)
 [![Go Report Card](https://goreportcard.com/badge/github.com/richinsley/jumpboot)](https://goreportcard.com/report/github.com/richinsley/jumpboot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Jumpboot is a Go library that simplifies integrating Python into your Go applications.  It provides a robust and flexible way to:
+Embed Python and its entire ecosystem in your Go binary. Ship a single executable that creates its own Python environment on first run.
 
-*   **Create and manage isolated Python environments** using either [micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html) (a fast, lightweight conda implementation) or standard Python `venv`.
-*   **Install Python packages** via both `pip` and `conda` (through micromamba).
-*   **Run Python code** in several ways:
-    *   Execute Python scripts.
-    *   Run code snippets within a persistent REPL-like environment.
-    *   Execute arbitrary Python code with JSON-based input/output.
-*   **Share data efficiently** (optional) using shared memory and semaphores (requires CGO on Linux/macOS).
-*  **Freeze and recreate** python environments for maximum reproducibility.
-
-Jumpboot avoids the complexities of direct CGO bindings for general Python interaction, offering a cleaner and more maintainable approach using a bootstrap process. It's perfect for Go projects that need to leverage Python libraries or scripts without sacrificing performance or portability.
-
-## Why Jumpboot?
-
-*   **Simplified Integration:**  Easily embed Python functionality into your Go applications without complex setup or external dependencies (beyond `micromamba` itself, which Jumpboot can automatically download).
-*   **Environment Isolation:**  Prevent conflicts between your Go project's dependencies and your Python code's dependencies. Each Python environment is self-contained.
-*   **Flexibility:**  Choose between micromamba (for speed and conda compatibility) and `venv` (for standard Python virtual environments) based on your needs.
-*   **Performance:**  Communicate with Python processes via efficient pipes.  Optionally use shared memory for zero-copy data transfer when performance is critical.
-*   **Reproducibility:** Freeze environments to JSON files and recreate them later, ensuring consistent behavior across different systems and deployments.
-*   **No CGO (Generally):**  Avoids the build-time and runtime complexities of CGO for most operations. CGO is only used for the *optional* shared memory and semaphore features (on non-Windows platforms).
-*  **Windows, Linux and MacOS Support**: Create and manage python environments on all major operating systems.
-
-## Table of Contents
-
-*   [Environment Creation and Management](ENVIRONMENTS.md)
-*   [Defining Python Programs (Modules and Packages)](PROGRAMS.md)
-*   [Using the REPL Runtime](REPL.md)
-*   [Examples](examples/README.md)
-*   [Bootstrapping Process](BOOTSTRAP.md)
-
-## Installation
-```bash
-go get https://github.com/richinsley/jumpboot
-```
-
-## Quickstart
-
-This example shows the basics of creating a micromamba-based environment, installing a package, and running a simple Python script.  See the examples/ directory for more detailed use cases.
 ```go
-package main
-
-import (
-	"fmt"
-	"log"
-	"os"
-	"path/filepath"
-
-	"github.com/richinsley/jumpboot"
-)
+//go:embed sentiment.py
+var sentimentCode string
 
 func main() {
-	// Create a temporary directory for the environment.
-	tempDir, err := os.MkdirTemp("", "jumpboot-example")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir) // Clean up after the example.
+    // Creates isolated Python 3.11 environment with pip (first run only)
+    env, _ := jumpboot.CreateEnvironmentMamba("mlenv", "./envs", "3.11", "conda-forge", nil)
 
-	// Create a new environment.
-	env, err := jumpboot.CreateEnvironmentMamba(
-		"my-example-env", // Environment name
-		tempDir,        // Root directory
-		"3.9",          // Python version
-		"conda-forge",  // Conda channel
-		nil,            // Optional progress callback (can be nil)
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
+    if env.IsNew {
+        env.PipInstallPackages([]string{"transformers", "torch"}, "", "", false, nil)
+    }
 
-    fmt.Printf("Environment created: %s\n", env.EnvPath)
+    // Embed Python code in your binary, call it like a function
+    mod := jumpboot.NewModuleFromString("sentiment", "sentiment.py", sentimentCode)
+    repl, _ := env.NewREPLPythonProcess(nil, nil, []jumpboot.Module{*mod}, nil)
+    defer repl.Close()
 
-	// Install a package using pip.
-	err = env.PipInstallPackage("requests", "", "", true, nil) //install requests, no cache
-	if err != nil {
-		log.Fatal(err)
-	}
-
-    fmt.Println("Requests package installed")
-
-	// Run a simple Python script.
-	scriptPath := filepath.Join(tempDir, "my_script.py")
-	err = os.WriteFile(scriptPath, []byte("import requests\nprint(requests.get('[https://www.google.com](https://www.google.com)').status_code)"), 0644)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	output, err := env.RunPythonReadCombinedOutput(scriptPath) //get combined stdout and stderr output
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Script output:\n%s\n", output)
+    repl.Execute("import sentiment", true)
+    result, _ := repl.Execute(`sentiment.analyze("I love this product!")`, true)
+    fmt.Println(result)  // {"label": "POSITIVE", "score": 0.9998}
 }
 ```
 
-## Advanced Usage
+```python
+# sentiment.py - embedded in Go binary
+from transformers import pipeline
+classifier = pipeline("sentiment-analysis")
 
-For more advanced use cases and to understand the internals of Jumpboot, see the following documentation:
+def analyze(text):
+    return classifier(text)[0]
+```
 
-*   [REPL Runtime](REPL.md):  Details on using the REPL-like Python process.
-*   [Bootstrapping Process](BOOTSTRAP.md):  Explanation of how Jumpboot initializes Python processes.
+## What This Gives You
+
+**Single binary deployment.** Your Go app ships as one executable. On first run, it bootstraps a complete Python environment with any packages you need. Users don't install Python separately.
+
+**Full Python ecosystem.** NumPy, PyTorch, TensorFlow, Hugging Face, OpenCV, pandas, scikit-learn—if it's on PyPI or conda-forge, you can use it.
+
+**Multiple Python versions, simultaneously.** Run Python 3.9 for one task and Python 3.12 for another in the same application. Each environment is completely independent with its own packages.
+
+```go
+// Legacy code needs Python 3.8 with older numpy
+legacyEnv, _ := jumpboot.CreateEnvironmentMamba("legacy", "./envs", "3.8", "conda-forge", nil)
+legacyEnv.PipInstallPackage("numpy==1.21.0", "", "", false, nil)
+
+// New ML pipeline needs Python 3.11 with latest packages
+mlEnv, _ := jumpboot.CreateEnvironmentMamba("ml", "./envs", "3.11", "conda-forge", nil)
+mlEnv.PipInstallPackages([]string{"numpy==2.0", "torch", "transformers"}, "", "", false, nil)
+
+// Run both simultaneously
+legacyRepl, _ := legacyEnv.NewREPLPythonProcess(nil, nil, nil, nil)
+mlRepl, _ := mlEnv.NewREPLPythonProcess(nil, nil, nil, nil)
+```
+
+**Isolated environments.** No conflicts with system Python or other apps. Pin exact package versions per environment for reproducible builds.
+
+**Three ways to run Python:**
+- **REPL** - Interactive sessions, execute code strings, get results
+- **QueueProcess** - Bidirectional RPC, call Python functions with structured data
+- **Direct execution** - Run scripts, capture output
+
+## Installation
+
+```bash
+go get github.com/richinsley/jumpboot
+```
+
+## Quick Examples
+
+### Call Python Functions from Go
+
+```go
+env, _ := jumpboot.CreateEnvironmentMamba("myenv", "./envs", "3.11", "conda-forge", nil)
+repl, _ := env.NewREPLPythonProcess(nil, nil, nil, nil)
+
+// Execute any Python and get results
+result, _ := repl.Execute("sum([1, 2, 3, 4, 5])", true)
+fmt.Println(result)  // 15
+
+// State persists between calls
+repl.Execute("import numpy as np", true)
+repl.Execute("data = np.random.randn(1000)", true)
+result, _ = repl.Execute("np.mean(data)", true)
+```
+
+### Embed Entire Packages
+
+```go
+//go:embed mypackage/*
+var myPackageFS embed.FS
+
+func main() {
+    pkg, _ := jumpboot.NewPackageFromFS("mypackage", "mypackage", "mypackage", myPackageFS)
+
+    program := &jumpboot.PythonProgram{
+        Name:     "MyApp",
+        Program:  mainModule,
+        Packages: []jumpboot.Package{*pkg},
+    }
+
+    process, _, _ := env.NewPythonProcessFromProgram(program, nil, nil, false)
+}
+```
+
+### Bidirectional RPC
+
+```go
+// Go calls Python
+result, _ := queue.Call("process_image", 30, map[string]interface{}{
+    "path": "/tmp/photo.jpg",
+    "resize": []int{800, 600},
+})
+
+// Python calls Go
+queue.RegisterHandler("log", func(data interface{}, id string) (interface{}, error) {
+    fmt.Printf("[Python] %v\n", data)
+    return "ok", nil
+})
+```
+
+## How It Works
+
+1. **First run**: Downloads micromamba (~5MB), creates a conda environment with your specified Python version, installs packages via pip/conda
+2. **Subsequent runs**: Environment exists, startup is fast
+3. **Communication**: Go spawns Python subprocess, communicates via pipes (MessagePack serialization)
+4. **Embedded code**: Python source is base64-encoded in the Go binary, loaded via custom import hooks
+
+No CGO required for basic operation. Optional shared memory features use CGO on Unix.
+
+## Examples
+
+| Example | What it demonstrates |
+|---------|---------------------|
+| [repl](examples/repl/) | Interactive Python from Go |
+| [jsonqueueserver](examples/jsonqueueserver/) | Bidirectional RPC with MessagePack |
+| [chromadb](examples/chromadb/) | Vector database for embeddings |
+| [gradio](examples/gradio/) | Python web UI from Go |
+| [mlx](examples/mlx/) | ML inference on Apple Silicon |
+| [embedded_packages](examples/embedded_packages/) | Complex package structures |
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Quick Start](docs/QUICKSTART.md) | Get running in 5 minutes |
+| [Environments](docs/ENVIRONMENTS.md) | Creating and managing Python environments |
+| [Programs](docs/PROGRAMS.md) | Embedding modules and packages |
+| [REPL](docs/REPL.md) | Interactive Python sessions |
+| [Queue Process](docs/QUEUE.md) | Bidirectional RPC |
+| [Architecture](docs/ARCHITECTURE.md) | Internal design |
+| [AI Agents](docs/AGENTS.md) | Guide for AI coding assistants |
+
+## What It Doesn't Do
+
+- **Replace Python with Go** - This is for using Python libraries from Go, not avoiding Python
+- **Require CGO** - Basic features work without CGO; shared memory is optional
+- **Provide Python C API bindings** - Communication is via subprocess pipes, not embedded interpreter
+
+## Platform Support
+
+| Platform | Status |
+|----------|--------|
+| macOS (amd64, arm64) | Supported |
+| Linux (amd64, arm64) | Supported |
+| Windows (amd64) | Supported |
+
+## License
+
+MIT

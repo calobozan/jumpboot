@@ -17,7 +17,7 @@ import (
 //   - progressCallback: Optional progress callback; may be nil
 //
 // Returns an error if pip fails, including stderr output for debugging.
-func (env *Environment) PipInstallPackages(packages []string, index_url string, extra_index_url string, no_cache bool, progressCallback ProgressCallback) error {
+func (env *PythonEnvironment) PipInstallPackages(packages []string, index_url string, extra_index_url string, no_cache bool, progressCallback ProgressCallback) error {
 	args := []string{
 		"install",
 		"--no-warn-script-location",
@@ -73,7 +73,7 @@ func (env *Environment) PipInstallPackages(packages []string, index_url string, 
 
 // PipInstallRequirements installs packages from a requirements.txt file.
 // The file should contain one package specifier per line in pip format.
-func (env *Environment) PipInstallRequirements(requirementsPath string, progressCallback ProgressCallback) error {
+func (env *PythonEnvironment) PipInstallRequirements(requirementsPath string, progressCallback ProgressCallback) error {
 	installCmd := exec.Command(env.PipPath, "install", "--no-warn-script-location", "-r", requirementsPath)
 
 	stdout, err := installCmd.StdoutPipe()
@@ -108,7 +108,7 @@ func (env *Environment) PipInstallRequirements(requirementsPath string, progress
 
 // PipInstallPackage installs a single Python package using pip.
 // This is a convenience wrapper around PipInstallPackages for single packages.
-func (env *Environment) PipInstallPackage(packageToInstall string, index_url string, extra_index_url string, no_cache bool, progressCallback ProgressCallback) error {
+func (env *PythonEnvironment) PipInstallPackage(packageToInstall string, index_url string, extra_index_url string, no_cache bool, progressCallback ProgressCallback) error {
 	packages := []string{
 		packageToInstall,
 	}

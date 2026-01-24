@@ -322,7 +322,7 @@ func procTemplate(templateStr string, data interface{}) string {
 //   - args: Command-line arguments passed to the Python program
 //
 // Returns the PythonProcess, the JSON-encoded program data, and any error.
-func (env *Environment) NewPythonProcessFromProgram(program *PythonProgram, environment_vars map[string]string, extrafiles []*os.File, debug bool, args ...string) (*PythonProcess, []byte, error) {
+func (env *PythonEnvironment) NewPythonProcessFromProgram(program *PythonProgram, environment_vars map[string]string, extrafiles []*os.File, debug bool, args ...string) (*PythonProcess, []byte, error) {
 	// create the jumpboot package
 	jumpboot_package, err := newPackageFromFS("jumpboot", "jumpboot", "packages/jumpboot", jumpboot_package)
 	if err != nil {
@@ -496,7 +496,7 @@ func (env *Environment) NewPythonProcessFromProgram(program *PythonProgram, envi
 //   - extrafiles: Additional file handles to pass to Python
 //   - debug: Currently unused, reserved for future debugging features
 //   - args: Command-line arguments accessible via sys.argv
-func (env *Environment) NewPythonProcessFromString(script string, environment_vars map[string]string, extrafiles []*os.File, debug bool, args ...string) (*PythonProcess, error) {
+func (env *PythonEnvironment) NewPythonProcessFromString(script string, environment_vars map[string]string, extrafiles []*os.File, debug bool, args ...string) (*PythonProcess, error) {
 	// Create a pipe for the secondary bootstrap script
 	// we'll write the script to the writer
 	reader, writer, err := os.Pipe()

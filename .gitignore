@@ -28,3 +28,4 @@ envs/
 gather.py
 combined_files.txt
 __debug_bin*
+embedded_packages

@@ -28,7 +28,10 @@ var replScript string
 //	repl.Execute("x = 42", true)
 //	result, _ := repl.Execute("print(x * 2)", true)  // returns "84"
 //
-// Thread-safe: Execute calls are serialized via mutex to prevent interleaving.
+// REPLPythonProcess is safe for concurrent use by multiple goroutines. Execute calls
+// are serialized via an internal mutex to prevent interleaving. Note that while Go-side
+// access is thread-safe, the underlying Python interpreter is single-threaded, so
+// concurrent Execute calls will be serialized on the Python side as well.
 type REPLPythonProcess struct {
 	*PythonProcess
 
@@ -52,7 +55,7 @@ type REPLPythonProcess struct {
 //
 // The REPL process starts with combined output mode (stdout and stderr merged).
 // Use Execute with combinedOutput=false to capture them separately.
-func (env *Environment) NewREPLPythonProcess(kvpairs map[string]interface{}, environment_vars map[string]string, modules []Module, packages []Package) (*REPLPythonProcess, error) {
+func (env *PythonEnvironment) NewREPLPythonProcess(kvpairs map[string]interface{}, environment_vars map[string]string, modules []Module, packages []Package) (*REPLPythonProcess, error) {
 	cwd, _ := os.Getwd()
 	if modules == nil {
 		modules = []Module{}

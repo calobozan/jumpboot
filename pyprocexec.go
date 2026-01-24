@@ -40,7 +40,7 @@ type PythonExecProcess struct {
 
 // NewPythonExecProcess creates a Python process for simple command execution.
 // Commands are sent as JSON and results are received as JSON responses.
-func (env *Environment) NewPythonExecProcess(environment_vars map[string]string, extrafiles []*os.File) (*PythonExecProcess, error) {
+func (env *PythonEnvironment) NewPythonExecProcess(environment_vars map[string]string, extrafiles []*os.File) (*PythonExecProcess, error) {
 	cwd, _ := os.Getwd()
 	program := &PythonProgram{
 		Name: "PythonExecProcess",

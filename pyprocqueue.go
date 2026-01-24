@@ -15,6 +15,11 @@ import (
 // QueueProcess provides bidirectional RPC-style communication between Go and Python.
 // It uses MessagePack serialization over pipes for efficient message passing.
 //
+// QueueProcess is safe for concurrent use by multiple goroutines. Each Call() is
+// serialized via an internal mutex, and responses are correlated with requests using
+// unique IDs. Command handlers registered via RegisterHandler are invoked in separate
+// goroutines and may execute concurrently.
+//
 // QueueProcess supports:
 //   - Calling Python methods from Go with Call() or the fluent On().Do().Call() API
 //   - Registering Go handlers that Python can invoke
@@ -132,7 +137,7 @@ type ParameterInfo struct {
 //
 // The function starts the message loop automatically and discovers Python methods
 // via introspection. Python stdout/stderr are forwarded to Go's os.Stdout/os.Stderr.
-func (env *Environment) NewQueueProcess(program *PythonProgram, serviceStruct interface{}, environment_vars map[string]string, extrafiles []*os.File) (*QueueProcess, error) {
+func (env *PythonEnvironment) NewQueueProcess(program *PythonProgram, serviceStruct interface{}, environment_vars map[string]string, extrafiles []*os.File) (*QueueProcess, error) {
 	pyProcess, _, err := env.NewPythonProcessFromProgram(program, environment_vars, extrafiles, false)
 	if err != nil {
 		return nil, err
