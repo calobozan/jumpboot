@@ -98,6 +98,11 @@ result, _ = repl.Execute("np.mean(data)", true)
 var myPackageFS embed.FS
 
 func main() {
+    // NewPackageFromFS(name, sourcePath, rootPath, fs)
+    //   name:       Python import name (import mypackage)
+    //   sourcePath: Path prefix for virtual __file__ paths
+    //   rootPath:   Directory within embed.FS containing the package
+    //   fs:         The embedded filesystem
     pkg, _ := jumpboot.NewPackageFromFS("mypackage", "mypackage", "mypackage", myPackageFS)
 
     program := &jumpboot.PythonProgram{
@@ -128,7 +133,7 @@ queue.RegisterHandler("log", func(data interface{}, id string) (interface{}, err
 
 ## How It Works
 
-1. **First run**: Downloads micromamba (~5MB), creates a conda environment with your specified Python version, installs packages via pip/conda
+1. **First run**: Downloads [micromamba](https://mamba.readthedocs.io/en/latest/) (~5MB), creates a conda environment with your specified Python version, installs packages via pip/conda
 2. **Subsequent runs**: Environment exists, startup is fast
 3. **Communication**: Go spawns Python subprocess, communicates via pipes (MessagePack serialization)
 4. **Embedded code**: Python source is base64-encoded in the Go binary, loaded via custom import hooks
@@ -161,7 +166,7 @@ No CGO required for basic operation. Optional shared memory features use CGO on 
 ## What It Doesn't Do
 
 - **Replace Python with Go** - This is for using Python libraries from Go, not avoiding Python
-- **Require CGO** - Basic features work without CGO; shared memory is optional
+- **Require CGO** - Basic features work without CGO; shared memory is optional, but super awesome!
 - **Provide Python C API bindings** - Communication is via subprocess pipes, not embedded interpreter
 
 ## Platform Support
@@ -171,6 +176,10 @@ No CGO required for basic operation. Optional shared memory features use CGO on 
 | macOS (amd64, arm64) | Supported |
 | Linux (amd64, arm64) | Supported |
 | Windows (amd64) | Supported |
+
+## Acknowledgments
+
+Jumpboot uses [micromamba](https://mamba.readthedocs.io/en/latest/) for fast, reliable conda environment management. Micromamba is a lightweight, standalone C++ implementation of the conda package manager developed by the [mamba](https://github.com/mamba-org/mamba) team.
 
 ## License
 
