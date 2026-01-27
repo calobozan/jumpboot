@@ -140,6 +140,8 @@ queue.RegisterHandler("log", func(data interface{}, id string) (interface{}, err
 
 No CGO required for basic operation. Optional shared memory features use CGO on Unix.
 
+**Building without CGO:** When you build with `CGO_ENABLED=0`, shared memory functions (`CreateSharedMemory`, `OpenSharedMemory`) will return `ErrSharedMemoryNotAvailable`. All other features work normally.
+
 ## Examples
 
 | Example | What it demonstrates |
@@ -166,7 +168,7 @@ No CGO required for basic operation. Optional shared memory features use CGO on 
 ## What It Doesn't Do
 
 - **Replace Python with Go** - This is for using Python libraries from Go, not avoiding Python
-- **Require CGO** - Basic features work without CGO; shared memory is optional, but super awesome!
+- **Require CGO** - Basic features work without CGO (`CGO_ENABLED=0`); shared memory is optional and requires CGO on Unix (disabled at compile time without it)
 - **Provide Python C API bindings** - Communication is via subprocess pipes, not embedded interpreter
 
 ## Platform Support
